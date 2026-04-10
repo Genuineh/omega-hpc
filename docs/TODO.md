@@ -5,8 +5,8 @@
 - [ ] **omega-hpc-memory**: Unified memory and knowledge base system
   - [ ] Phase 1: Foundation + Knowledge Index (MVP)
     - [ ] Create project structure
-    - [ ] Implement `.omega/cortex/` - Cortex layer (index)
-    - [ ] Implement `.omega/kb/` - Knowledge layer (content)
+    - [ ] Implement `.hpc/cortex/` - Cortex layer (index)
+    - [ ] Implement `.hpc/kb/` - Knowledge layer (content)
     - [ ] `omega-hpc init` command
     - [ ] `omega-hpc add` command
     - [ ] BM25 indexing via tantivy
@@ -18,7 +18,7 @@
     - [ ] Entity extraction
     - [ ] `omega-hpc stat` command
   - [ ] Phase 3: Memory Layer + MCP Integration
-    - [ ] Implement `.omega/mem/` - Memory layer
+    - [ ] Implement `.hpc/mem/` - Memory layer
     - [ ] `omega-hpc recall` command
     - [ ] MCP protocol support
     - [ ] `omega-hpc forget` command
@@ -42,10 +42,10 @@
 
 ## Key Design Changes (v2)
 
-- **Multi-file layered architecture** instead of single .omega file
-  - `.omega/cortex/` - Metacognition index
-  - `.omega/kb/` - Knowledge base content
-  - `.omega/mem/` - Agent memory layer
+- **Multi-file layered architecture** instead of single .hpc file
+  - `.hpc/cortex/` - Metacognition index
+  - `.hpc/kb/` - Knowledge base content
+  - `.hpc/mem/` - Agent memory layer
 - **Index-first design** - Store indexes, load content on demand
 - **Unified memory + knowledge base** - Both agent memory and document retrieval
 - **Project-scoped knowledge base** - User decides boundaries

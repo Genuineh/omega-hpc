@@ -41,7 +41,7 @@ omega-hpc stat
 初始化后创建以下结构：
 
 ```
-.omega/
+.hpc/
 ├── cortex/            # 元认知索引
 │   ├── index.toml
 │   ├── bm25.bin
@@ -66,7 +66,7 @@ omega-hpc init [OPTIONS] [PATH]
 初始化项目记忆空间。
 
 Options:
-- `--path <PATH>` 记忆空间路径 (default: `.omega`)
+- `--path <PATH>` 记忆空间路径 (default: `.hpc`)
 - `--force` 强制覆盖
 
 ```bash
@@ -74,7 +74,7 @@ Options:
 omega-hpc init
 
 # 在指定路径初始化
-omega-hpc init --path /path/to/project/.omega
+omega-hpc init --path /path/to/project/.hpc
 ```
 
 ### add
@@ -255,11 +255,11 @@ omega-hpc eval --benchmark locomo --output results.json
 
 ## Configuration
 
-配置文件: `.omega-hpc.toml`
+配置文件: `.hpc.toml`
 
 ```toml
 [omega]
-cortex_path = ".omega"
+cortex_path = ".hpc"
 
 [indexing]
 chunk_size = 512

@@ -39,10 +39,10 @@
 
 | 文件类型 | 职责 | 可否合并 |
 |----------|------|----------|
-| `.omega.cortex` | 元认知索引 | 多个可合并 |
-| `.omega.kb/` | 知识库内容分片 | 按项目隔离 |
-| `.omega.mem` | Agent 记忆层 | 按用户/会话隔离 |
-| `.omega.sync` | 同步元数据 | 自动管理 |
+| `.hpc.cortex` | 元认知索引 | 多个可合并 |
+| `.hpc.kb/` | 知识库内容分片 | 按项目隔离 |
+| `.hpc.mem` | Agent 记忆层 | 按用户/会话隔离 |
+| `.hpc.sync` | 同步元数据 | 自动管理 |
 
 ### 3. Git 友好
 
@@ -56,7 +56,7 @@
 
 ```
 project/
-├── .omega/
+├── .hpc/
 │   ├── cortex/                    # 元认知层（索引）
 │   │   ├── index.toml            # 主索引清单
 │   │   ├── bm25.idx              # BM25 结构（二进制，可重建）
@@ -82,13 +82,13 @@ project/
 ```
 查询 "上次为什么选了 PostgreSQL"
     ↓
-1. 查询 .omega.cortex（索引层）
+1. 查询 .hpc/cortex（索引层）
    - 找到相关实体 "PostgreSQL"
    - 找到相关决策记忆引用
     ↓
-2. 如需内容，按引用加载 .omega.kb/ 中的 chunk
+2. 如需内容，按引用加载 .hpc/kb/ 中的 chunk
     ↓
-3. 如需 Agent 记忆，加载 .omega.mem/ 中对应 .mem 文件
+3. 如需 Agent 记忆，加载 .hpc/mem/ 中对应 .mem 文件
     ↓
 返回：索引片段 + 关联记忆 + 原始文档引用
 ```
@@ -127,7 +127,7 @@ project/
    - 索引可独立重建
 
 6. **多项目隔离**
-   - 不同项目使用不同 .omega 目录
+   - 不同项目使用不同 .hpc 目录
    - 项目间可显式共享知识库
 
 7. **时间旅行**
@@ -148,7 +148,7 @@ project/
 
 ### Cortex Layer (元认知)
 
-`.omega.cortex/` 是整个系统的"大脑皮层"，保存索引结构：
+`.hpc.cortex/` 是整个系统的"大脑皮层"，保存索引结构：
 
 ```toml
 # index.toml
@@ -176,7 +176,7 @@ related_chunks = ["chunk_010"]
 
 ### Knowledge Layer (知识库)
 
-`.omega.kb/` 保存分片内容：
+`.hpc.kb/` 保存分片内容：
 
 ```
 {content-hash}.chunk  # 二进制或压缩格式
@@ -186,7 +186,7 @@ related_chunks = ["chunk_010"]
 
 ### Memory Layer (记忆)
 
-`.omega.mem/` 保存 Agent 的私有记忆：
+`.hpc.mem/` 保存 Agent 的私有记忆：
 
 ```toml
 # {session-id}.mem

@@ -40,7 +40,7 @@ omega-hpc/
 
 **目录结构：**
 ```
-.omega/
+.hpc/
 ├── cortex/          # 元认知层（索引）
 ├── kb/              # 知识库层（内容）
 ├── mem/             # 记忆层（Agent 私有）
