@@ -1,42 +1,59 @@
 # Omega HPC
 
-AI Agent 操作平台 - 持久化记忆系统 + 多模型支持框架
+AI Agent 操作平台 - 统一记忆与知识库系统
+
+## 核心理念
+
+**索引即记忆**。保存结构化索引（类比大脑皮层/元认知），内容按需加载。记忆分层通过多文件实现，各司其职，不无限扩张。
 
 ## 项目结构
 
 ```
 omega-hpc/
-├── docs/               # 项目文档
-│   ├── prds/          # 产品需求文档
-│   ├── specs/         # 技术规格
-│   └── guide/         # 使用指南
-├── crates/            # Rust workspace (规划中)
-└── skills/            # AI Agent 操作指南
+├── docs/                    # 项目文档
+│   ├── prds/               # 产品需求文档
+│   ├── specs/              # 技术规格
+│   ├── guide/              # 使用指南
+│   └── archive/            # 历史文档
+├── crates/                 # Rust workspace (规划中)
+└── skills/                 # AI Agent 操作指南
 ```
 
 ## 核心组件
 
-### Omega HPC Memory (持久化记忆系统)
+### Omega HPC Memory
 
-为 AI Agent 提供持久化记忆存储和检索能力。
+统一记忆与知识库系统，同时服务于：
+- **Agent 长期记忆** - 跨会话保留决策、偏好
+- **外部知识库** - 以项目为单位的文档索引与检索
 
-**特性:**
-- 单文件 `.omega` 格式，零外部依赖
-- 混合搜索 (BM25 + 向量)
-- RCLI 命令行工具
-- 多格式文档支持
+**架构特点：**
+- 多文件分层架构（不是单一大文件）
+- 索引与内容分离
+- 项目级知识库隔离
+- MCP 接口支持主动记忆写入
 
-**文档:**
+**文档：**
 - [设计文档](docs/prds/omega-hpc-memory-prd.md)
 - [技术规格](docs/specs/omega-hpc-memory-spec.md)
 - [使用指南](docs/guide/omega-hpc-memory-guide.md)
 
-**CLI 命令:**
+**目录结构：**
+```
+.omega/
+├── cortex/          # 元认知层（索引）
+├── kb/              # 知识库层（内容）
+├── mem/             # 记忆层（Agent 私有）
+└── sync/            # 同步层
+```
+
+**CLI 命令：**
 ```bash
-omega-hpc init              # 初始化记忆库
-omega-hpc add ./docs/       # 添加文档
-omega-hpc search <query>    # 语义搜索
-omega-hpc find --exact x    # 精确匹配
+omega-hpc init              # 初始化记忆空间
+omega-hpc add ./docs/      # 添加知识库
+omega-hpc search <query>   # 检索
+omega-hpc recall <query>   # 回忆记忆
+omega-hpc find --exact x   # 精确匹配
 ```
 
 ## 技术参考

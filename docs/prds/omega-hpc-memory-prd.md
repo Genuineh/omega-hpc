@@ -1,248 +1,312 @@
-# Omega HPC Memory: Persistent Memory System for AI Agents
+# Omega HPC Memory: Unified Memory and Knowledge Base System
 
 ## Summary
 
-为 omega-hpc 设计一套基于 Rust 的持久化记忆系统，通过单一 `.omega` 文件存储多元项目数据，提供 RCLI 命令行检索接口，实现快速、高效、可移植的 AI Agent 记忆层。
+为 omega-hpc 设计一套统一记忆与知识库系统，同时服务于：
+1. **Agent 长期记忆** - 跨会话保留决策、偏好、上下文
+2. **外置知识库** - 以项目为单位的文档索引与检索
+
+核心理念：**索引即记忆**。保存的是结构化索引（类比大脑皮层/元认知），内容按需加载。记忆的分层通过多个单文件实现，各司其职，不无限扩张。
 
 ## Problem
 
-当前 omega-hpc 作为 AI Agent 操作指南项目，缺乏有效的知识持久化和检索能力：
-- Agent 每次会话无法保留上下文记忆
-- 跨会话无法复用历史决策和经验
+当前 omega-hpc 存在两层需求未被满足：
+
+**记忆层缺失**
+- Agent 每次会话从零开始，无法保留历史决策
+- 跨会话无法复用经验（如"上次因为 X 原因选了 Y 方案"）
+- 缺乏主动记忆写入机制（MCP 接口）
+
+**知识库层缺失**
 - 大量文档和技能指南无法快速检索
-- 缺乏统一的记忆存储和查询接口
+- 文档检索与 Agent 记忆是割裂的两套系统
+- 缺乏统一的索引管理和版本追踪
 
-## Users
+## Design Principles
 
-- AI Agents (Claude Code, OpenCode 等)
-- 开发者 (通过 RCLI 查询项目知识)
-- 其他工具集成 (通过 SDK)
+### 1. 索引即记忆
+
+不存储原始内容副本，而是存储：
+- **索引结构** - BM25、向量、实体槽位的组织方式
+- **引用映射** - 内容在哪、如何加载
+- **关联图谱** - 实体之间的关系
+
+类比：大脑保存的是神经连接模式，而非完整经历录像。
+
+### 2. 多文件分层
+
+不搞单一大文件，每个文件类型有明确职责：
+
+| 文件类型 | 职责 | 可否合并 |
+|----------|------|----------|
+| `.omega.cortex` | 元认知索引 | 多个可合并 |
+| `.omega.kb/` | 知识库内容分片 | 按项目隔离 |
+| `.omega.mem` | Agent 记忆层 | 按用户/会话隔离 |
+| `.omega.sync` | 同步元数据 | 自动管理 |
+
+### 3. Git 友好
+
+- 索引文件是结构化文本（TOML/JSON），可 diff
+- 内容通过 content-addressable 引用（hash 寻址）
+- 每个文件变更可独立追踪和 review
+
+## Architecture
+
+### 文件层次
+
+```
+project/
+├── .omega/
+│   ├── cortex/                    # 元认知层（索引）
+│   │   ├── index.toml            # 主索引清单
+│   │   ├── bm25.idx              # BM25 结构（二进制，可重建）
+│   │   ├── entities.toml         # 实体槽位映射
+│   │   └── embeddings/           # 向量分片（可外部化）
+│   │       └── shard_001.vec
+│   │
+│   ├── kb/                       # 知识库层（内容）
+│   │   └── {content-hash}.chunk # 分片内容块
+│   │
+│   ├── mem/                      # 记忆层（Agent 私有）
+│   │   ├── sessions/            # 按会话组织
+│   │   │   └── {session-id}.mem
+│   │   └── users/               # 按用户组织
+│   │       └── {user-id}.mem
+│   │
+│   └── sync/                     # 同步层
+│       └── manifest.toml        # 变更追踪
+```
+
+### 检索流程
+
+```
+查询 "上次为什么选了 PostgreSQL"
+    ↓
+1. 查询 .omega.cortex（索引层）
+   - 找到相关实体 "PostgreSQL"
+   - 找到相关决策记忆引用
+    ↓
+2. 如需内容，按引用加载 .omega.kb/ 中的 chunk
+    ↓
+3. 如需 Agent 记忆，加载 .omega.mem/ 中对应 .mem 文件
+    ↓
+返回：索引片段 + 关联记忆 + 原始文档引用
+```
 
 ## Requirements
 
 ### Must Have
 
-1. **单文件持久化存储**
-   - 使用 `.omega` 格式存储所有记忆数据
-   - 零外部依赖，离线可用
-   - 支持 Git 提交和同步
+1. **多格式知识库索引**
+   - 支持 Markdown、纯文本、代码、结构化文档
+   - 自动分块（512 tokens 默认）
+   - Content-addressable 存储
 
 2. **混合检索引擎**
-   - BM25 词项搜索 (快速、精确)
-   - 向量相似度搜索 (语义理解)
-   - 混合模式自动平衡
+   - BM25 词项搜索（精确）
+   - 向量相似搜索（语义）
+   - 实体槽位 O(1) 查询
+   - 支持组合查询
 
-3. **RCLI 命令行接口**
-   - `omega-hpc init` - 初始化记忆库
-   - `omega-hpc add <file>` - 添加文档
-   - `omega-hpc search <query>` - 语义搜索
-   - `omega-hpc find --exact <pattern>` - 精确匹配
-   - `omega-hpc stat` - 查看统计信息
+3. **RCLI 命令行**
+   - `omega-hpc init` - 初始化项目记忆空间
+   - `omega-hpc add` - 添加知识库内容
+   - `omega-hpc search` - 混合检索
+   - `omega-hpc recall` - 回忆相关记忆
+   - `omega-hpc forget` - 删除记忆/索引
 
-4. **多格式文件支持**
-   - Markdown (.md)
-   - 纯文本 (.txt)
-   - 代码文件 (.rs, .ts, .py, .js 等)
-   - 结构化文档 (.yaml, .json)
+4. **记忆写入接口**
+   - MCP 协议集成
+   - 支持 Agent 主动写入记忆
+   - 会话级别的记忆快照
 
 ### Should Have
 
-5. **实体提取与 O(1) 查询**
-   - 自动提取实体 (人名、概念、技术)
-   - 槽位存储实现常量时间查找
+5. **增量索引更新**
+   - 文件变化时只更新受影响部分
+   - 索引可独立重建
 
-6. **时间旅行调试**
-   - 记录检索会话历史
-   - 支持回放和参数调优
+6. **多项目隔离**
+   - 不同项目使用不同 .omega 目录
+   - 项目间可显式共享知识库
 
-7. **增量索引更新**
-   - 文件变化时自动增量更新
-   - 无需全量重建索引
+7. **时间旅行**
+   - 查看历史索引版本
+   - 对比不同时间点的记忆状态
 
 ### Nice to Have
 
-8. **LLM 驱动的记忆总结**
-   - 自动生成文档摘要
-   - 关键信息抽取
+8. **记忆总结与压缩**
+   - LLM 生成记忆摘要
+   - 过期记忆归档
 
-9. **多记忆空间**
-   - User Memory / Session Memory / Agent Memory 分层
+9. **跨记忆库关联**
+   - 建立项目间知识引用
+   - 形成知识图谱
 
-## Architecture
+## Memory Layer Specification
+
+### Cortex Layer (元认知)
+
+`.omega.cortex/` 是整个系统的"大脑皮层"，保存索引结构：
+
+```toml
+# index.toml
+version = "1.0"
+
+[meta]
+created_at = "2026-04-10T00:00:00Z"
+updated_at = "2026-04-10T00:00:00Z"
+total_chunks = 1247
+total_entities = 156
+
+[[documents]]
+id = "doc_001"
+path = "docs/TODO.md"
+mime_type = "text/markdown"
+content_hash = "sha256:abc123..."
+chunk_ids = ["chunk_001", "chunk_002"]
+
+[[entities]]
+name = "omega-hpc"
+type = "project"
+slots = { description = "AI Agent 操作平台" }
+related_chunks = ["chunk_010"]
+```
+
+### Knowledge Layer (知识库)
+
+`.omega.kb/` 保存分片内容：
 
 ```
-omega-hpc-memory/
-├── omega-hpc-memory-core/      # 核心库 (无外部依赖)
-│   ├── src/
-│   │   ├── lib.rs
-│   │   ├── storage/        # .omega 文件格式
-│   │   ├── index/         # BM25 + Vector 索引
-│   │   ├── entity/        # 实体提取与槽位索引
-│   │   └── search/        # 混合搜索引擎
-│   └── Cargo.toml
-│
-├── omega-hpc-memory-cli/       # RCLI 应用
-│   ├── src/
-│   │   ├── main.rs
-│   │   └── commands/      # 子命令实现
-│   └── Cargo.toml
-│
-└── omega-hpc-memory-sdk/       # SDK (可选 Rust crate)
-    ├── src/
-    └── Cargo.toml
+{content-hash}.chunk  # 二进制或压缩格式
 ```
 
-### .omega 文件格式
+每个 chunk 包含原始内容的片段，可通过 hash 校验完整性。
 
-```
-+------------------+
-| Header (Magic)   |  8 bytes: "OMEGA001"
-+------------------+
-| Version          |  2 bytes
-+------------------+
-| Metadata Size    |  4 bytes
-+------------------+
-| Metadata JSON    |  N bytes
-+------------------+
-| Documents        |  N bytes (ID + Content + Chunks)
-+------------------+
-| BM25 Index       |  N bytes
-+------------------+
-| Vector Store     |  N bytes (扁平向量 + HNSW)
-+------------------+
-| Entity Index     |  N bytes (槽位映射)
-+------------------+
-| Checksum         |  32 bytes (SHA-256)
-+------------------+
+### Memory Layer (记忆)
+
+`.omega.mem/` 保存 Agent 的私有记忆：
+
+```toml
+# {session-id}.mem
+version = "1.0"
+
+[session]
+id = "sess_20260410_001"
+agent = "claude-code"
+user = "jerryg"
+started_at = "2026-04-10T10:00:00Z"
+
+[[facts]]
+content = "用户偏好 Rust 作为主要开发语言"
+extracted_at = "2026-04-10T10:30:00Z"
+confidence = 0.95
+
+[[decisions]]
+content = "选择 Tantivy 作为 BM25 引擎因为纯 Rust 实现"
+context = "需要避免外部依赖"
+decided_at = "2026-04-10T11:00:00Z"
 ```
 
 ## Evaluation Framework
 
-### 评估原则
+### 评估维度
 
-评估体系必须满足以下原则，防止通过取巧方式通过评测：
+由于系统同时服务"文档检索"和"Agent 记忆"两种场景，评测也分两个方向：
 
-1. **闭卷评测** - 评测数据集不得包含在训练集或索引中
-2. **真实任务** - 题目必须来自真实使用场景，而非人工构造
-3. **不可预测性** - 评测题目在系统设计时未知，防止针对特定题目优化
-4. **多维度度量** - 同时评估准确性、延迟、Token 消耗等多个维度
-5. **可复现性** - 评测结果可被独立复现
+#### A. 知识库检索评测
 
-### Benchmark 评估体系
+参考 [LoCoMo](https://arxiv.org/abs/2504.19413) 的四类问题：
+| 维度 | 适用场景 |
+|------|----------|
+| Single-hop | 直接文档查询（"Tantivy 在哪用？"） |
+| Temporal | 时间顺序查询（"上次更新是什么时候？"） |
+| Multi-hop | 跨文档推理（"哪个决策导致了现在的架构？"） |
+| Open-domain | 开放问答（"这个项目的设计原则是什么？"） |
 
-#### 1. LoCoMo Benchmark (Long-Term Conversation Memory)
+#### B. 记忆保持评测
 
-**来源**: [Mem0 论文](https://arxiv.org/abs/2504.19413) 使用的基准测试
-
-**评估维度**:
 | 维度 | 描述 |
 |------|------|
-| Single-hop | 单点事实查询 |
-| Temporal | 时间相关查询 |
-| Multi-hop | 多跳推理查询 |
-| Open-domain | 开放域问答 |
+| 记忆召回率 | 相同上下文再次出现时能否正确回忆 |
+| 干扰抵抗 | 新记忆是否覆盖/混淆旧记忆 |
+| 摘要质量 | LLM 生成的记忆摘要是否准确 |
 
-**评估指标**:
-- **LLM-as-Judge Score** - 使用 LLM 评判答案正确性 (0-1)
-- **BLEU Score** - 与标准答案的 n-gram 相似度
-- **F1 Score** - 精确率和召回率的调和平均
+### 评测指标
 
-**性能指标**:
-- **Token 消耗** - 单次查询消耗的 Token 数
-- **P50/P95 延迟** - 检索延迟分布
+| 指标 | 目标 | 说明 |
+|------|------|------|
+| Recall@K | > 0.85 | Top-K 结果中相关文档的比例 |
+| MRR | > 0.75 | 平均倒数排名 |
+| 记忆精度 | > 0.80 | Agent 记忆与事实的符合度 |
+| P50 延迟 | < 30ms | 纯索引查询 |
+| P95 延迟 | < 150ms | 含内容加载的查询 |
 
-**参考基线**:
-| 系统 | LLM Score | Token 消耗 | P95 延迟 |
-|------|-----------|------------|----------|
-| Full-context | ~72.9% | ~26K | ~17.12s |
-| OpenAI Memory | ~52.9% | ~8K | ~4.2s |
-| Mem0 | ~66.9% | ~1.8K | ~1.44s |
+### 防作弊机制
 
-#### 2. Omega HPC Memory 评测集
-
-针对 omega-hpc 特定场景的评测集：
-
-**文档检索评测**:
-- 跨文档引用检索
-- 代码-文档关联检索
-- 决策历史追溯
-
-**记忆持久化评测**:
-- 跨会话记忆保留率
-- 增量更新一致性
-- 实体记忆准确性
-
-#### 3. 鲁棒性测试
-
-| 测试类型 | 描述 |
-|----------|------|
-| 噪声注入 | 在输入中加入无关信息，测试检索抗干扰能力 |
-| 长上下文 | 超长输入下的检索性能 |
-| 部分匹配 | 输入与记忆不完全匹配时的召回能力 |
-| 时序推理 | 基于时间顺序的推理查询 |
-
-#### 4. 评测执行框架
-
-```bash
-# 评测命令
-omega-hpc eval --benchmark locomo [--output results.json]
-omega-hpc eval --benchmark omega-hpc [--output results.json]
-omega-hpc eval --benchmark robustness [--output results.json]
-
-# 生成评测报告
-omega-hpc eval --report [--format html|markdown]
-```
-
-### 评测数据集管理
-
-**约束**:
-1. 评测数据集独立存储，不参与索引构建
-2. 每次评测使用不同的随机种子
-3. 评测题目在提交前保持隐藏
-
-**防止作弊机制**:
-- 评测数据集定期更新
-- 支持第三方独立评测
-- 公开评测子集用于本地验证
+1. **闭卷索引** - 评测数据集不得在构建索引时使用
+2. **独立题库** - 题库与代码库分离，定期轮换
+3. **无捷径优化** - 禁止针对评测题目添加人工规则
 
 ## Technical Decisions
 
 | 决策点 | 选择 | 理由 |
 |--------|------|------|
-| 存储格式 | 单一 .omega 文件 | 便于 Git 追踪、复制、同步 |
-| 向量引擎 | 扁平向量 + 简单索引 | 避免外部依赖，保持离线可用 |
-| 嵌入模型 | 可配置 (本地/远程) | 支持离线 + 云端灵活切换 |
-| 分词器 | Unicode aware + 代码专用 | 支持多语言和代码片段 |
-| 评测标准 | LoCoMo + 自定义 | 行业标准 + 场景适配 |
+| 存储架构 | 多文件分层 | 职责分离、Git 友好、可独立更新 |
+| 索引格式 | TOML + 二进制 | TOML 可 diff，二进制高效 |
+| 向量存储 | 可插拔 | 本地（flat/HNSW）或远程 API |
+| 嵌入模型 | 运行时选择 | 本地（Candle/ONNX）或远程（OpenAI） |
+| 内容引用 | Content-addressable | Hash 寻址，防篡改，可去重 |
 
 ## Reference Architecture
 
-参考 [Memvid](https://memvid.com) 的设计理念：
-- 单文件便携性
-- 混合搜索 (BM25 + Vector)
-- O(1) 实体查找
-- 时间旅行调试
+**参考 [Memvid](https://memvid.com) 的设计理念：**
+- 单文件便携性 → 多文件分层，索引独立
+- 混合搜索 → 保留为核心能力
 
-参考 [Mem0](https://github.com/mem0ai/mem0) 的设计理念：
-- 多级记忆分层
-- 开发者友好的 API
-- CLI 优先
-- LoCoMo Benchmark 评测体系
+**参考 [Mem0](https://github.com/mem0ai/mem0) 的设计理念：**
+- 多级记忆分层 → 实现 User/Session/Agent 三层
+- LLM 驱动的记忆提取 → 作为 Should Have
+
+**区别于两者：**
+- 不是单一大文件
+- 索引与内容分离
+- 显式知识库层支持外部文档
 
 ## Timeline
 
-- **Phase 1**: 核心库 + 基本 CLI (MVP)
-- **Phase 2**: 混合搜索 + 实体提取
-- **Phase 3**: 增量索引 + 时间旅行
-- **Phase 4**: SDK + 集成
-- **Phase 5**: 评测体系 + Benchmark 适配
+- **Phase 1**: 基础框架 + 知识库索引（MVP）
+  - 项目初始化 + add 命令
+  - BM25 索引 + search 命令
+  - Cortex 层实现
+
+- **Phase 2**: 检索增强 + 向量搜索
+  - 向量引擎集成
+  - 混合搜索
+  - 实体提取
+
+- **Phase 3**: 记忆层 + MCP 集成
+  - Memory 层实现
+  - MCP 协议支持
+  - recall 命令
+
+- **Phase 4**: 高级特性
+  - 增量更新
+  - 时间旅行
+  - 记忆总结
+
+- **Phase 5**: 评测体系
+  - 题库构建
+  - 评测框架
+  - 性能基准
 
 ## Open Questions
 
-1. 嵌入模型选择：本地 Embedding 还是调用远程 API？
-2. 是否需要支持多用户/多租户？
-3. 与现有 skills/ 系统如何集成？
-4. 评测数据集的规模和覆盖范围？
+1. 向量引擎具体实现（本地 HNSW 还是远程？）
+2. MCP 接口的记忆写入语义（何时触发记忆提取？）
+3. 知识库是否需要版本分支？
+4. 多 Agent 共享记忆的权限模型？
 
 ## Related Documents
 

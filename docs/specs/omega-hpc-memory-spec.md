@@ -2,82 +2,202 @@
 
 ## Overview
 
-omega-hpc-memory 是 omega-hpc 的持久化记忆层，提供基于 Rust 的高性能存储和检索能力。
+omega-hpc-memory 是统一记忆与知识库系统，同时服务于 Agent 长期记忆和外部知识库检索。
 
-## File Format: .omega
+**核心理念：索引即记忆**。系统保存的是结构化索引（类比大脑皮层/元认知），内容按需加载。
 
-### Version: 1.0
+## Architecture
+
+### File Hierarchy
 
 ```
-Offset  Size    Field           Description
-------  ----    -----           -----------
-0       8       magic           "OMEGA001"
-8       2       version         0x0001
-10      4       metadata_len    metadata JSON length
-14      N       metadata        JSON (见下)
-14+N    M       documents       Document storage
-...     K       bm25_index      BM25 index data
-...     L       vectors         Vector store (HNSW-lite)
-...     P       entities        Entity slot index
-...     32      checksum        SHA-256 of all above
+.omega/                        # 项目记忆根目录
+├── cortex/                    # 元认知层（索引）
+│   ├── index.toml             # 主索引清单
+│   ├── bm25.bin               # BM25 结构
+│   ├── entities.toml          # 实体槽位
+│   └── embeddings/            # 向量分片
+│       └── shard_*.vec
+│
+├── kb/                        # 知识库层（内容）
+│   └── {hash}.chunk          # 内容分片
+│
+├── mem/                       # 记忆层（Agent 私有）
+│   ├── sessions/
+│   │   └── {session-id}.mem
+│   └── users/
+│       └── {user-id}.mem
+│
+└── sync/
+    └── manifest.toml          # 变更追踪
 ```
 
-### Metadata Schema
+### Cortex Layer Files
 
-```json
-{
-  "version": "1.0",
-  "created_at": "2026-04-10T00:00:00Z",
-  "updated_at": "2026-04-10T00:00:00Z",
-  "doc_count": 100,
-  "chunk_count": 1500,
-  "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
-  "vector_dim": 384
-}
+#### index.toml
+
+```toml
+version = "1.0"
+
+[meta]
+created_at = "2026-04-10T00:00:00Z"
+updated_at = "2026-04-10T00:00:00Z"
+total_chunks = 1247
+total_entities = 156
+
+[[documents]]
+id = "doc_001"
+path = "docs/TODO.md"
+mime_type = "text/markdown"
+content_hash = "sha256:abc123..."
+chunk_ids = ["chunk_001", "chunk_002"]
+chunk_count = 2
+
+[[entities]]
+name = "omega-hpc"
+type = "project"
+slots = { description = "AI Agent 操作平台" }
+related_chunks = ["chunk_010"]
+```
+
+#### bm25.bin
+
+BM25 索引结构，使用 `tantivy` 生成：
+- 可从 index.toml 重建
+- 二进制格式，高效压缩
+
+#### entities.toml
+
+```toml
+[[slots]]
+name = "PostgreSQL"
+type = "technology"
+values = { role = "数据库", selected_at = "2026-04-01" }
+
+[[slots]]
+name = "Tantivy"
+type = "library"
+values = { language = "Rust", purpose = "BM25 引擎" }
+```
+
+### Knowledge Layer Files
+
+#### {hash}.chunk
+
+Content-addressable 内容分片：
+
+```
++------------------+
+| Header           |  Magic (4B) + Hash (32B) + Size (4B)
++------------------+
+| Content          |  原始文本/压缩内容
++------------------+
+| Checksum         |  SHA-256
++------------------+
+```
+
+### Memory Layer Files
+
+#### {session-id}.mem
+
+```toml
+version = "1.0"
+
+[session]
+id = "sess_20260410_001"
+agent = "claude-code"
+user = "jerryg"
+started_at = "2026-04-10T10:00:00Z"
+ended_at = "2026-04-10T12:00:00Z"
+
+[[facts]]
+id = "fact_001"
+content = "用户偏好 Rust 作为主要开发语言"
+extracted_at = "2026-04-10T10:30:00Z"
+confidence = 0.95
+source = "conversation"
+
+[[decisions]]
+id = "dec_001"
+content = "选择 Tantivy 作为 BM25 引擎因为纯 Rust 实现"
+context = "需要避免外部依赖"
+decided_at = "2026-04-10T11:00:00Z"
+revised = false
+
+[[references]]
+doc_id = "doc_001"
+relevance = 0.85
+last_accessed = "2026-04-10T11:30:00Z"
 ```
 
 ## Core Components
 
-### 1. Document Store
+### 1. Indexer
 
 ```rust
-struct Document {
-    id: u64,
-    path: String,
-    mime_type: String,
-    chunks: Vec<Chunk>,
-    metadata: HashMap<String, String>,
+pub struct Indexer {
+    cortex_path: PathBuf,
+    kb_path: PathBuf,
 }
 
-struct Chunk {
-    id: u64,
-    content: String,
-    start_line: u32,
-    end_line: u32,
+impl Indexer {
+    pub fn add_document(&mut self, path: &Path) -> Result<DocId>;
+    pub fn add_directory(&mut self, path: &Path, glob: &Glob) -> Result<()>;
+    pub fn rebuild_index(&mut self) -> Result<()>;
 }
 ```
 
-### 2. BM25 Index
-
-- Indexer: `tantivy` (pure Rust)
-- Parameters: `k1=1.5, b=0.75`
-- Field: content (tokenized, lowercased)
-
-### 3. Vector Store
-
-- Pure Rust implementation
-- Flat index with quantization
-- Default dim: 384 (configurable)
-- Similarity: Cosine
-
-### 4. Entity Extractor
+### 2. Search Engine
 
 ```rust
-struct EntitySlot {
-    name: String,
-    entity_type: String,  // "person", "concept", "technology"
-    values: HashMap<String, String>,
+pub struct SearchEngine {
+    bm25_index: tantivy::Index,
+    vector_store: Box<dyn VectorStore>,
+    entity_index: HashMap<String, EntitySlot>,
 }
+
+impl SearchEngine {
+    pub fn search(&self, query: &str, mode: SearchMode) -> Result<Vec<SearchHit>>;
+    pub fn search_hybrid(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>>;
+    pub fn search_bm25(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>>;
+    pub fn search_vector(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>>;
+}
+
+pub enum SearchMode {
+    Hybrid { alpha: f32 },  // BM25 weight
+    BM25,
+    Vector,
+}
+```
+
+### 3. Memory Store
+
+```rust
+pub struct MemoryStore {
+    mem_path: PathBuf,
+}
+
+impl MemoryStore {
+    pub fn save_fact(&mut self, fact: &Fact) -> Result<()>;
+    pub fn save_decision(&mut self, decision: &Decision) -> Result<()>;
+    pub fn recall(&self, query: &str) -> Result<Vec<MemoryHit>>;
+    pub fn get_session(&self, session_id: &str) -> Result<Session>;
+}
+```
+
+### 4. Vector Store Trait
+
+```rust
+pub trait VectorStore: Send + Sync {
+    fn add(&mut self, id: &str, embedding: &[f32]) -> Result<()>;
+    fn search(&self, query: &[f32], k: usize) -> Result<Vec<ScoredId>>;
+    fn save(&self, path: &Path) -> Result<()>;
+    fn load(&mut self, path: &Path) -> Result<()>;
+}
+
+// 内置实现
+pub struct FlatVectorStore;
+pub struct HNSWVectorStore;
 ```
 
 ## RCLI Commands
@@ -85,35 +205,77 @@ struct EntitySlot {
 ### init
 
 ```bash
-omega-hpc init [--path <.omega_path>]
+omega-hpc init [OPTIONS] [PATH]
 ```
 
-创建新的记忆库文件。
+初始化项目记忆空间，创建 `.omega/` 目录结构。
+
+Options:
+- `--path <PATH>` 记忆空间根目录 (default: `.omega`)
+- `--force` 强制覆盖
 
 ### add
 
 ```bash
-omega-hpc add <file_or_directory> [--recursive] [--glob <pattern>]
+omega-hpc add [OPTIONS] <PATH>
 ```
 
-添加文件或目录到记忆库。
+添加知识库内容到索引。
+
+Options:
+- `--recursive, -r` 递归添加目录
+- `--glob <PATTERN>` 文件过滤
+- `--chunk-size <N>` 分块大小 (default: 512)
+- `--no-content` 仅添加索引，不存储内容
 
 ### search
 
 ```bash
-omega-hpc search <query> [--limit <n>] [--mode <hybrid|bm25|vector>]
+omega-hpc search [OPTIONS] <QUERY>
 ```
 
-混合语义搜索。
+混合检索。
+
+Options:
+- `--limit, -n <N>` 结果数量 (default: 10)
+- `--mode <MODE>` 搜索模式: `hybrid`, `bm25`, `vector`
+- `--format <FMT>` 输出格式: `json`, `table`, `simple`
+
+### recall
+
+```bash
+omega-hpc recall [OPTIONS] <QUERY>
+```
+
+回忆相关 Agent 记忆。
+
+Options:
+- `--session <ID>` 限定会话
+- `--user <ID>` 限定用户
+- `--type <TYPE>` 记忆类型: `fact`, `decision`, `all`
 
 ### find
 
 ```bash
-omega-hpc find --exact <pattern> [--case-sensitive]
-omega-hpc find --regex <pattern>
+omega-hpc find --exact <PATTERN>
+omega-hpc find --regex <PATTERN>
 ```
 
 精确匹配搜索。
+
+### forget
+
+```bash
+omega-hpc forget [OPTIONS]
+```
+
+删除记忆或索引。
+
+Options:
+- `--doc <ID>` 删除文档索引
+- `--fact <ID>` 删除事实
+- `--session <ID>` 删除会话记忆
+- `--entity <NAME>` 删除实体
 
 ### stat
 
@@ -121,143 +283,91 @@ omega-hpc find --regex <pattern>
 omega-hpc stat
 ```
 
-显示记忆库统计信息。
+显示记忆空间统计。
 
-### export
+### eval
 
 ```bash
-omega-hpc export [--format <json|markdown>] [--output <path>]
+omega-hpc eval [OPTIONS]
 ```
 
-导出记忆内容。
+运行评测。
+
+Options:
+- `--benchmark <NAME>` 基准: `locomo`, `knowledge`, `memory`
+- `--dataset <PATH>` 数据集路径
+- `--output <PATH>` 输出路径
 
 ## Embedding Integration
 
-### Local (Default)
+### Local (Default - ONNX)
 
 ```toml
-[memory]
-embedding = "local"
+[embedding]
+provider = "onnx"
 model = "sentence-transformers/all-MiniLM-L6-v2"
 ```
+
+使用 `mistral.rs` 或 ` candle` 加载 ONNX 模型，纯 Rust 无外部依赖。
 
 ### Remote API
 
 ```toml
-[memory]
-embedding = "openai"
+[embedding]
+provider = "openai"
 model = "text-embedding-3-small"
 api_key = "${OPENAI_API_KEY}"
 ```
 
-## Evaluation Framework
+### Vector Store Configuration
 
-### Benchmark Integration
-
-#### 1. LoCoMo Benchmark Protocol
-
-参考 [Mem0 Evaluation](https://github.com/mem0ai/mem0/tree/main/evaluation) 实现。
-
-**评测执行**:
-```bash
-omega-hpc eval --benchmark locomo --dataset ./benchmarks/locomo/
+```toml
+[vector]
+store = "hnsw"           # flat | hnsw
+dim = 384
+hnsw_m = 16
+hnsw_ef = 128
 ```
-
-**输出格式**:
-```json
-{
-  "benchmark": "locomo",
-  "timestamp": "2026-04-10T00:00:00Z",
-  "results": {
-    "single_hop": { "llm_score": 0.85, "bleu": 0.72, "f1": 0.78 },
-    "temporal": { "llm_score": 0.72, "bleu": 0.65, "f1": 0.68 },
-    "multi_hop": { "llm_score": 0.68, "bleu": 0.58, "f1": 0.62 },
-    "open_domain": { "llm_score": 0.75, "bleu": 0.66, "f1": 0.70 }
-  },
-  "performance": {
-    "token_cost_avg": 1847,
-    "p50_latency_ms": 45,
-    "p95_latency_ms": 120
-  }
-}
-```
-
-#### 2. Anti-Gaming Measures
-
-**闭卷评测约束**:
-```rust
-struct EvalConfig {
-    // 评测数据集不得包含在索引构建中
-    exclude_eval_from_index: true,
-    
-    // 使用随机采样防止题目泄露
-    random_seed: Option<u64>,
-    
-    // 评测时禁用特定优化
-    disable_shortcut_optimizations: true,
-}
-```
-
-**防止作弊机制**:
-1. 评测数据集独立存储，使用时加载
-2. 题目在评测前对系统保持隐藏
-3. 不允许针对特定题目添加人工索引
-4. 支持第三方独立评测接口
-
-#### 3. Evaluation Commands
-
-```bash
-# 运行 LoCoMo 评测
-omega-hpc eval --benchmark locomo
-
-# 运行 Omega HPC 场景评测
-omega-hpc eval --benchmark omega-hpc
-
-# 运行鲁棒性测试
-omega-hpc eval --benchmark robustness
-
-# 生成评测报告
-omega-hpc eval --report --format html
-
-# 对比评测 (vs 基线)
-omega-hpc eval --compare --baseline mem0
-```
-
-### Evaluation Metrics
-
-| Metric | Description | Target |
-|--------|-------------|--------|
-| LLM-as-Judge | LLM 评判答案正确性 (0-1) | > 0.65 |
-| BLEU Score | n-gram 相似度 | > 0.60 |
-| F1 Score | 精确率/召回率调和平均 | > 0.65 |
-| Token Cost | 单次查询 Token 消耗 | < 2K |
-| P50 Latency | 中位数延迟 | < 50ms |
-| P95 Latency | 95分位延迟 | < 200ms |
 
 ## Performance Targets
 
 | Metric | Target |
 |--------|--------|
-| Index speed | 10,000 chunks/sec |
-| Search latency (p50) | < 50ms |
-| Search latency (p99) | < 200ms |
-| Memory usage | < 500MB for 1M chunks |
-| File size | ~1KB per chunk |
+| Index speed | 5,000 chunks/sec |
+| Search P50 | < 30ms (index only) |
+| Search P95 | < 150ms (with content) |
+| Memory (1M chunks) | < 1GB |
+| Chunk size | ~1KB avg |
 
 ## Error Handling
 
 | Error | Code | Handling |
 |-------|------|----------|
-| Invalid magic | E0001 | 拒绝打开，显示帮助 |
-| Corrupted index | E0002 | 提供修复模式 |
-| Out of memory | E0003 | 优雅降级，分批处理 |
-| Eval dataset not found | E0101 | 提示下载或检查路径 |
-| Eval dimension mismatch | E0102 | 配置检查 |
+| Invalid cortex | E0001 | 引导重建 |
+| Chunk not found | E0002 | 提示重新添加 |
+| Corrupted index | E0003 | 提供修复命令 |
+| Out of memory | E0004 | 降级到 flat 搜索 |
 
-## Testing Strategy
+## Evaluation
 
-- Unit tests for each module
-- Integration tests for CLI
-- Benchmark suite for search quality
-- Fuzz testing for parser
-- Evaluation framework validation against LoCoMo
+### Benchmark Integration
+
+```bash
+# Knowledge Retrieval Benchmark
+omega-hpc eval --benchmark knowledge --dataset ./benchmarks/knowledge/
+
+# Memory Recall Benchmark  
+omega-hpc eval --benchmark memory --dataset ./benchmarks/memory/
+
+# Combined
+omega-hpc eval --benchmark locomo
+```
+
+### Metrics
+
+| Metric | Description |
+|--------|-------------|
+| Recall@K | Relevant docs in top K |
+| MRR | Mean Reciprocal Rank |
+| Memory Precision | Agent memory accuracy |
+| Latency P50/P95 | Search latency percentiles |

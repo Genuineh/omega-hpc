@@ -2,41 +2,53 @@
 
 ## Active
 
-- [ ] **omega-hpc-memory**: Persistent memory system for AI agents
-  - [ ] Phase 1: Core library + basic CLI
-    - [ ] Create `crates/omega-hpc-memory-core/` workspace member
-    - [ ] Implement `.omega` file format
-    - [ ] Implement BM25 index (via tantivy)
-    - [ ] Implement vector store
-    - [ ] Create `omega-hpc-memory-cli` binary
-    - [ ] Implement `init` command
-    - [ ] Implement `add` command
-  - [ ] Phase 2: Search + entities
-    - [ ] Implement `search` command (hybrid mode)
-    - [ ] Implement `find` command (exact/regex)
-    - [ ] Implement entity extractor
-    - [ ] Implement `stat` command
-  - [ ] Phase 3: Advanced features
-    - [ ] Incremental indexing
+- [ ] **omega-hpc-memory**: Unified memory and knowledge base system
+  - [ ] Phase 1: Foundation + Knowledge Index (MVP)
+    - [ ] Create project structure
+    - [ ] Implement `.omega/cortex/` - Cortex layer (index)
+    - [ ] Implement `.omega/kb/` - Knowledge layer (content)
+    - [ ] `omega-hpc init` command
+    - [ ] `omega-hpc add` command
+    - [ ] BM25 indexing via tantivy
+    - [ ] `omega-hpc search` command
+  - [ ] Phase 2: Retrieval Enhancement + Vector Search
+    - [ ] Vector store implementation (Flat/HNSW)
+    - [ ] Embedding integration (ONNX local or remote)
+    - [ ] `omega-hpc find` command
+    - [ ] Entity extraction
+    - [ ] `omega-hpc stat` command
+  - [ ] Phase 3: Memory Layer + MCP Integration
+    - [ ] Implement `.omega/mem/` - Memory layer
+    - [ ] `omega-hpc recall` command
+    - [ ] MCP protocol support
+    - [ ] `omega-hpc forget` command
+    - [ ] Agent memory auto-extraction
+  - [ ] Phase 4: Advanced Features
+    - [ ] Incremental index updates
     - [ ] Time-travel debugging
-    - [ ] `export` command
-  - [ ] Phase 4: SDK + integration
-    - [ ] Create `omega-hpc-memory-sdk` crate
-    - [ ] Integrate with skills system
-  - [ ] Phase 5: Evaluation framework
-    - [ ] Implement LoCoMo benchmark integration
-    - [ ] Build anti-gaming evaluation constraints
-    - [ ] Create omega-hpc scenario benchmarks
-    - [ ] Implement robustness testing suite
-    - [ ] Add `eval` command and reporting
+    - [ ] `omega-hpc eval` command
+  - [ ] Phase 5: Evaluation System
+    - [ ] Benchmark framework
+    - [ ] Knowledge retrieval benchmarks
+    - [ ] Memory recall benchmarks
+    - [ ] Anti-gaming measures
 
 ## Completed
 
 - [x] Create project documentation structure
-- [x] Write `docs/prds/omega-hpc-memory-prd.md`
-- [x] Write `docs/specs/omega-hpc-memory-spec.md`
-- [x] Write `docs/guide/omega-hpc-memory-guide.md`
-- [x] Add evaluation framework (LoCoMo benchmark, anti-gaming measures)
+- [x] Write `docs/prds/omega-hpc-memory-prd.md` (revised)
+- [x] Write `docs/specs/omega-hpc-memory-spec.md` (revised)
+- [x] Write `docs/guide/omega-hpc-memory-guide.md` (revised)
+
+## Key Design Changes (v2)
+
+- **Multi-file layered architecture** instead of single .omega file
+  - `.omega/cortex/` - Metacognition index
+  - `.omega/kb/` - Knowledge base content
+  - `.omega/mem/` - Agent memory layer
+- **Index-first design** - Store indexes, load content on demand
+- **Unified memory + knowledge base** - Both agent memory and document retrieval
+- **Project-scoped knowledge base** - User decides boundaries
 
 ## Deferred
 
@@ -44,4 +56,4 @@
 
 ## Archive
 
-- None
+- [v1 design](./archive/omega-hpc-memory-prd-v1.md) - Initial monolithic single-file design
