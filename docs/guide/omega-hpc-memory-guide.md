@@ -294,7 +294,7 @@ hybrid_alpha = 0.7         # BM25 weight
 
 ### 记忆管理
 
-1. **主动记忆**: Agent 通过 MCP 接口主动写入 `omega-hpc.mem`
+1. **主动记忆**: Agent 通过 SDK 接口主动写入记忆
 2. **自动提取**: 对话结束时自动提取 facts 和 decisions
 3. **定期清理**: 使用 `omega-hpc forget` 删除过期记忆
 

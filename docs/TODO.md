@@ -17,10 +17,10 @@
     - [ ] `omega-hpc find` command
     - [ ] Entity extraction
     - [ ] `omega-hpc stat` command
-  - [ ] Phase 3: Memory Layer + MCP Integration
+  - [ ] Phase 3: Memory Layer + SDK Integration
     - [ ] Implement `.hpc/mem/` - Memory layer
     - [ ] `omega-hpc recall` command
-    - [ ] MCP protocol support
+    - [ ] SDK programming interface
     - [ ] `omega-hpc forget` command
     - [ ] Agent memory auto-extraction
   - [ ] Phase 4: Advanced Features
