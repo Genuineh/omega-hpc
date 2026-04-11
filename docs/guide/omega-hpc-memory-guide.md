@@ -259,7 +259,29 @@ Options:
 ```bash
 omega-hpc eval --benchmark knowledge
 omega-hpc eval --benchmark memory --output results.json
+omega-hpc eval --benchmark locomo --dataset ./benchmarks/locomo/
 ```
+
+### LoCoMo Benchmark
+
+测试多轮多会话对话中的记忆检索能力。
+
+**四类问题**:
+| 类别 | 示例 |
+|------|------|
+| Single-hop | "用户的职位是什么？" |
+| Temporal | "用户上周说想去哪旅行？" |
+| Multi-hop | "用户的经理偏好什么工作方式？" |
+| Open-domain | "总结用户的职业背景" |
+
+**评测指标**: LLM-as-Judge, BLEU, F1, Token 消耗, P50/P95 延迟
+
+**参考基线** (来自 [Mem0 论文](https://arxiv.org/abs/2504.19413)):
+| 系统 | LLM Score | Token | P95 延迟 |
+|------|-----------|-------|----------|
+| Full-context | ~72.9% | ~26K | ~17.12s |
+| Mem0 | ~66.9% | ~1.8K | ~1.44s |
+| Mem0+Graph | ~68.4% | ~2.5K | ~2.59s |
 
 ---
 

@@ -39,6 +39,7 @@
 ### Phase 4: Advanced Features
 - [ ] Incremental index updates
 - [ ] Time-travel debugging
+- [ ] `omega-hpc eval --benchmark locomo`
 - [ ] `omega-hpc eval --benchmark knowledge`
 - [ ] `omega-hpc eval --benchmark memory`
 
@@ -74,8 +75,10 @@
 - Session snapshots on demand
 
 ### Benchmark
-- **LoCoMo NOT adopted** - it's for dialogue memory auto-extraction
-- Use knowledge retrieval + memory recall benchmarks instead
+- **LoCoMo adopted** - dialogue memory recall across sessions
+- **Knowledge retrieval** - document search accuracy
+- **Memory recall** - agent memory accuracy
+- Anti-gaming: closed-book, independent question bank, no shortcut optimization
 
 ## Deferred
 

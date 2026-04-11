@@ -409,25 +409,73 @@ hybrid_alpha = 0.7
 
 ## Evaluation
 
-### Knowledge Retrieval Benchmark (Phase 4)
+### LoCoMo Benchmark (对话记忆)
+
+来源: [Mem0 论文](https://arxiv.org/abs/2504.19413)，评测多轮多会话对话中的记忆检索能力。
+
+**四类问题**:
+| 类别 | 描述 |
+|------|------|
+| Single-hop | 单点事实查询 |
+| Temporal | 时间相关查询 |
+| Multi-hop | 多跳推理查询 |
+| Open-domain | 开放域问答 |
+
+**评测指标**:
+| 指标 | 说明 |
+|------|------|
+| LLM-as-Judge | LLM 评判答案正确性 (0-1) |
+| BLEU | n-gram 相似度 |
+| F1 | 精确率/召回率调和平均 |
+| Token Cost | 单次查询 Token 消耗 |
+| P50/P95 Latency | 检索延迟 |
+
+**参考基线**:
+| 系统 | LLM Score | Token | P95 延迟 |
+|------|-----------|-------|----------|
+| Full-context | ~72.9% | ~26K | ~17.12s |
+| OpenAI Memory | ~52.9% | ~8K | ~4.2s |
+| Mem0 | ~66.9% | ~1.8K | ~1.44s |
+| Mem0+Graph | ~68.4% | ~2.5K | ~2.59s |
+
+```bash
+omega-hpc eval --benchmark locomo --dataset ./benchmarks/locomo/
+```
+
+### Knowledge Retrieval Benchmark
 
 ```bash
 omega-hpc eval --benchmark knowledge --dataset ./benchmarks/knowledge/
 ```
 
-**指标**：
-- Recall@K
-- MRR
-- P50/P95 Latency
+**指标**: Recall@K, MRR, P50/P95 Latency
 
-### Memory Recall Benchmark (Phase 4)
+### Memory Recall Benchmark
 
 ```bash
 omega-hpc eval --benchmark memory --dataset ./benchmarks/memory/
 ```
 
-**指标**：
-- Memory Recall
-- Memory Precision
+**指标**: Memory Recall, Memory Precision
 
-**不采用 LoCoMo**：LoCoMo 测试对话记忆自动提取，与本项目手动记忆写入机制不匹配。
+### Anti-Gaming Measures
+
+| 规则 | 说明 |
+|------|------|
+| 闭卷索引 | 评测数据集不参与索引构建 |
+| 独立题库 | 题库与代码库分离，定期轮换 |
+| 无捷径优化 | 禁止针对评测题目添加人工规则 |
+| 不可预测性 | 评测题目在系统设计时未知 |
+| 可复现性 | 评测结果可被独立复现 |
+
+### eval 命令
+
+```bash
+omega-hpc eval [OPTIONS]
+```
+
+Options:
+- `--benchmark <NAME>` 基准: `locomo`, `knowledge`, `memory`
+- `--dataset <PATH>` 数据集路径
+- `--output <PATH>` 输出文件
+- `--format <FMT>` 格式: `json`, `table`, `html`
