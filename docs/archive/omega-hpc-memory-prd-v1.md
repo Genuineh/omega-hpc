@@ -12,7 +12,7 @@
 
 ### Key Issues Identified
 
-1. **单文件 `.omega` 格式问题**
+1. **单文件 `omega.omega` 格式问题** (v1 原始设计)
    - 写入放大：任何更新需要重写整个文件
    - 并发安全缺失
    - Git 不友好
