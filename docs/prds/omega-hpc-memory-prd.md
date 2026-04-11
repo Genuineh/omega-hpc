@@ -30,6 +30,12 @@
 - 大量文档和技能指南无法快速检索
 - 文档检索与 Agent 记忆是割裂的两套系统
 
+**个性化检索缺失**
+- 固定分层无法适应不同项目需求
+- 代码项目需要源代码专用索引策略（语言感知分块、高召回优先级）
+- 文档项目需要不同分块大小和权重
+- 用户无法自定义召回维度和优先级
+
 ---
 
 ## Design Principles
@@ -43,33 +49,48 @@
 
 类比：大脑保存神经连接模式，而非完整经历录像。
 
-### 2. 多文件分层
+### 2. 可配置数据层
+
+数据层（Layer）是用户可配置的存储与检索单元。每个 Layer 描述一类数据的索引策略、存储方式和召回行为。
+
+**核心能力**：
+- 用户通过 `.hpc.toml` 定义任意数量的数据层
+- 每层独立配置索引参数（分块大小、glob 模式、分块策略）
+- 每层独立配置召回行为（优先级、boost、检索策略）
+- 层间支持继承，避免重复配置
+- 跨层搜索使用 Recall Fusion 合并结果
+
+**层类型**：
+- `content` - 外部文件内容，自动分块索引
+- `memory` - Agent 结构化记忆，手动/SDK 写入
+
+### 3. 多文件分层
 
 每个目录类型有明确职责，边界清晰：
 
 | 目录 | 职责 | 内容类型 | 边界规则 |
 |------|------|----------|----------|
 | `.hpc/cortex/` | 元认知索引 | TOML + 二进制索引 | 索引可独立重建 |
-| `.hpc/kb/` | 知识库内容 | Chunk 文件 | 按 content-hash 寻址 |
-| `.hpc/mem/` | Agent 记忆 | 结构化 .mem 文件 | 按用户/会话隔离 |
+| `.hpc/layers/{name}/` | 用户定义的数据层 | content 或 memory | 按层配置管理 |
 
-### 3. 层间一致性
+### 4. 层间一致性
 
-**Cortex 与 KB 的一致性**：
-- KB 内容通过 content-hash 引用，hash 不变则内容不变
-- Cortex 记录 `content_hash`，用于校验 KB 内容完整性
+**Cortex 与 Layer 的一致性**：
+- Content 层内容通过 content-hash 引用，hash 不变则内容不变
+- Cortex 按层组织索引，每层有独立的 BM25 索引
 - 文件外部修改后，hash 变化，Cortex 标记该 chunk 为 stale
 
-**Mem 与 KB 的关系**：
-- Mem 是结构化记忆（facts/decisions），不是文档 chunks
-- Mem 可引用 KB 中的文档（通过 doc_id）
-- Mem 有独立的查询接口（recall 命令）
+**跨层 Recall Fusion**：
+- 搜索时多层结果按 boost 调分后合并
+- Priority 决定同分时的排列顺序
+- 每层 max_results 限制单层返回数量
 
-### 4. Git 友好
+### 5. Git 友好
 
 - Cortex 文件是 TOML，可 diff
-- KB 使用 content-addressable 存储，每个 hash 对应确定内容
-- Mem 文件是 TOML，可追踪变更历史
+- Content 层使用 content-addressable 存储
+- Memory 层文件是 TOML，可追踪变更历史
+- `.hpc.toml` 层配置可纳入版本控制，团队共享
 
 ---
 
@@ -78,72 +99,107 @@
 ### 目录结构
 
 ```
-.hpc/                          # 项目记忆根目录（隐藏目录）
-├── cortex/                    # 元认知层（索引）
-│   ├── index.toml             # 主索引清单
-│   ├── bm25.bin               # BM25 结构（二进制）
-│   ├── entities.toml          # 实体槽位映射
+.hpc/                          # 项目记忆根目录
+├── cortex/                    # 元认知层（全局索引）
+│   ├── meta.toml              # 全局元数据
+│   ├── layers/                # 按层拆分的索引
+│   │   ├── {name}/
+│   │   │   ├── index.toml     # 层级文档清单
+│   │   │   ├── docs/          # 按文档拆分的索引
+│   │   │   └── bm25/          # tantivy 索引
+│   │   └── ...
+│   ├── entities.toml          # 实体槽位
 │   └── embeddings/            # 向量分片
-│       └── shard_*.bin
 │
-├── kb/                        # 知识库层（内容）
-│   └── {sha256}.chunk        # 内容分片，按 hash 寻址
-│
-├── mem/                       # 记忆层（Agent 私有）
-│   ├── sessions/
-│   │   └── {session-id}.mem  # 会话级记忆
-│   └── users/
-│       └── {user-id}.mem     # 用户级记忆
+├── layers/                    # 用户定义的数据层
+│   ├── {content-layer}/       # content: chunk 存储
+│   ├── {memory-layer}/        # memory: TOML 记忆
+│   └── ...
 │
 └── sync/
-    └── manifest.toml          # 变更追踪
+    └── manifest.toml
 ```
 
-### 各层边界定义
+### 层配置示例
 
-#### Cortex Layer (`.hpc/cortex/`)
+**代码项目**（多语言，通过继承减少重复）：
 
-**存储内容**：
-- 文档清单（哪些文件被索引）
-- Chunk 映射（文档 → chunks 的映射关系）
-- BM25 索引数据
-- 向量索引数据
-- 实体槽位表
+```toml
+[[layer]]
+name = "code"
+type = "content"
+abstract = true              # 模板层，不创建存储
 
-**不存储**：原始内容（由 KB 层提供）
+[layer.indexing]
+chunk_size = 1024
+overlap = 64
+strategy = "line"
+embed = true
 
-**一致性保证**：
-- 每个 document 记录 `content_hash`
-- 添加文档时同时写入 KB 层并更新 Cortex
-- KB 内容 hash 校验失败时，Cortex 标记为 stale，需重建
+[layer.recall]
+boost = 1.5
+max_results = 5
+strategy = "hybrid"
 
-#### Knowledge Layer (`.hpc/kb/`)
+[[layer]]
+name = "rust"
+extends = "code"
+priority = 1
 
-**存储内容**：
-- 文档分片（原始内容的压缩块）
-- 每个 chunk 独立校验
+[layer.indexing]
+glob = ["*.rs"]
 
-**边界规则**：
-- 内容通过 hash 寻址，不可变
-- 外部修改文件 → hash 变化 → 视为新 chunk
-- 旧 chunk 保留直至手动 gc
+[[layer]]
+name = "python"
+extends = "code"
+priority = 1
 
-#### Memory Layer (`.hpc/mem/`)
+[layer.indexing]
+glob = ["*.py", "*.pyi"]
 
-**存储内容**：
-- 结构化记忆（facts、decisions）
-- 会话元数据
-- Agent 提取的摘要信息
+[[layer]]
+name = "decisions"
+type = "content"
+priority = 0                # 最高优先级
 
-**与 KB 的区别**：
+[layer.indexing]
+chunk_size = 256
+glob = ["docs/decisions/*.md"]
+embed = false
 
-| 维度 | KB 层 | Mem 层 |
-|------|-------|--------|
-| 内容类型 | 文档分片 | 结构化记忆 |
-| 来源 | 外部文件 | Agent 提取/写入 |
-| 格式 | 二进制 chunk | TOML |
-| 查询接口 | `search` | `recall` |
-| 用途 | "这个项目有什么文档" | "Agent 上次怎么决策的" |
+[layer.recall]
+boost = 2.0
+max_results = 3
+strategy = "bm25"
+
+[[layer]]
+name = "memory"
+type = "memory"
+priority = 3
+
+[layer.recall]
+boost = 0.8
+strategy = "bm25"
+```
+
+### 层继承机制
+
+```
+resolve(name):
+  layer = config[name]
+  if layer.extends:
+    parent = resolve(layer.extends)
+    return deep_merge(parent, layer)
+  return layer
+```
+
+**规则**：
+- 标量：子覆盖父
+- 数组：子替换父
+- 表：递归合并
+- 支持多级继承链（A → B → C）
+- 禁止循环继承
+- `abstract = true` 的层仅作模板，不创建存储目录
 
 ---
 
@@ -153,13 +209,14 @@
 
 **1. 手动写入（CLI）**
 ```bash
-omega-hpc remember "用户偏好 Rust" --type fact --confidence 0.9
-omega-hpc remember "选择了 Tantivy 因为无外部依赖" --type decision
+omega-hpc remember "用户偏好 Rust" --type fact --layer memory
+omega-hpc remember "选择 Tantivy" --type decision
 ```
 
 **2. 手动写入（SDK）**
 ```rust
-mem_store.save_fact(Fact {
+let mem = MemoryStore::new("memory", &registry)?;
+mem.save_fact(Fact {
     content: "用户偏好 Rust".into(),
     confidence: 0.9,
 })?;
@@ -167,13 +224,12 @@ mem_store.save_fact(Fact {
 
 **3. 会话快照（CLI）**
 ```bash
-# 结束会话时自动生成快照
 omega-hpc session end
 ```
 
 **4. SDK 会话管理**
 ```rust
-let session = mem_store.start_session("claude-code", "jerryg")?;
+let session = mem.start_session("claude-code", "jerryg")?;
 session.extract_facts_from_conversation(&messages)?;
 session.save_decision("选择了 X 方案", "因为 Y 原因")?;
 session.end()?;
@@ -190,14 +246,14 @@ session.end()?;
 为支持 LoCoMo 等对话记忆评测场景，SDK 提供对话 → 结构化记忆的提取接口：
 
 ```
-对话历史 → [LLM 提取] → 结构化 facts/decisions → 写入 .hpc/mem/
+对话历史 → [LLM 提取] → 结构化 facts/decisions → 写入 memory 层
 ```
 
 **提取流程**：
 1. 调用方传入对话消息列表
 2. SDK 使用 LLM 提取关键 facts 和 decisions
 3. 返回提取结果供调用方确认或修改
-4. 调用方确认后写入 Mem 层
+4. 调用方确认后写入指定 memory 层
 
 **LLM 依赖**：
 - 提取质量取决于 LLM 能力
@@ -217,11 +273,12 @@ session.end()?;
 
 | 决策点 | 选择 | 理由 |
 |--------|------|------|
-| 存储架构 | 多文件分层 | 职责分离、Git 友好、可独立更新 |
+| 存储架构 | 可配置数据层 | 适应不同项目需求，个性化检索 |
 | 索引格式 | TOML + 二进制 | TOML 可 diff，二进制高效 |
-| KB 内容 | Content-addressable | Hash 寻址，防篡改，可去重 |
+| 内容存储 | Content-addressable | Hash 寻址，防篡改，可去重 |
+| 层间继承 | deep_merge | 避免重复配置，DRY |
 | 向量存储 | 可插拔 | 支持 flat/HNSW |
-| 嵌入模型 | **远程优先 + 本地 fallback** | 远程高质量，Candle 本地离线可用 |
+| 嵌入模型 | 远程优先 + 本地 fallback | 远程高质量，Candle 本地离线可用 |
 | CLI/SDK | 仅这两者 | 不提供 MCP 服务 |
 
 ### 嵌入模型选择
@@ -263,43 +320,53 @@ dim = 384
 
 ### Must Have
 
-1. **多格式知识库索引**
+1. **可配置数据层系统**
+   - 用户通过 `.hpc.toml` 定义数据层
+   - 支持 content 和 memory 两种层类型
+   - 每层独立配置索引参数和召回行为
+   - 层间继承机制（abstract + extends）
+   - 内置 default/code/minimal 模板
+
+2. **多格式知识库索引**
    - 支持 Markdown、纯文本、代码、结构化文档
-   - 自动分块（512 tokens 默认）
+   - 按层配置分块（大小、策略、glob）
    - Content-addressable 存储
 
-2. **混合检索引擎**
+3. **混合检索引擎**
    - BM25 词项搜索（精确）
    - 向量相似搜索（语义，远程 API）
-   - 实体槽位 O(1) 查询
+   - 跨层 Recall Fusion（boost + priority）
 
-3. **RCLI 命令行**
-   - `omega-hpc init` - 初始化项目记忆空间
-   - `omega-hpc add` - 添加知识库内容
-   - `omega-hpc search` - 混合检索
-   - `omega-hpc recall` - 回忆相关记忆
-   - `omega-hpc remember` - 写入记忆
-   - `omega-hpc forget` - 删除记忆/索引
+4. **RCLI 命令行**
+   - `omega-hpc init` - 初始化（含模板选择）
+   - `omega-hpc add --layer <name>` - 添加到指定层
+   - `omega-hpc search --layer <name>` - 检索（跨层或单层）
+   - `omega-hpc recall --layer <name>` - 回忆记忆
+   - `omega-hpc remember --layer <name>` - 写入记忆
+   - `omega-hpc forget --layer <name>` - 删除
+   - `omega-hpc layers` - 列出层配置
+   - `omega-hpc stat` - 统计
+   - `omega-hpc gc` - 垃圾回收
 
-4. **SDK 编程接口**
+5. **SDK 编程接口**
    - Rust crate 发布到 crates.io
-   - 提供 `MemoryStore`, `SearchEngine`, `Indexer` 核心 API
+   - 提供 `LayerRegistry`, `MemoryStore`, `SearchEngine`, `Indexer` 核心 API
 
 ### Should Have
 
-5. **增量索引更新**
+6. **增量索引更新**
    - 文件变化时只更新受影响部分
    - `omega-hpc rebuild` 重建索引
 
-6. **多项目隔离**
+7. **多项目隔离**
    - 不同项目使用不同 .hpc 目录
 
-7. **时间旅行**
+8. **时间旅行**
    - 查看历史索引版本
 
 ### Nice to Have
 
-8. **记忆总结**
+9. **记忆总结**
    - SDK 提供记忆序列化接口
    - LLM 摘要由调用方负责
 
@@ -307,35 +374,40 @@ dim = 384
 
 ## Timeline
 
-### Phase 1: 基础框架 + 知识库索引（MVP）
+### Phase 1: 基础框架 + 可配置层 + 知识库索引（MVP）
 
-- [ ] 项目初始化 + `init` 命令
-- [ ] `.hpc/cortex/` + `.hpc/kb/` 实现
-- [ ] `add` 命令 + 分块逻辑
-- [ ] BM25 索引（via tantivy）
-- [ ] `search` 命令（BM25 only）
+- [ ] 项目初始化 + `init` 命令（含模板）
+- [ ] Layer 配置解析 + 继承解析
+- [ ] `.hpc/cortex/` + `.hpc/layers/` 实现
+- [ ] `add --layer` 命令 + 分块逻辑
+- [ ] BM25 索引（via tantivy，按层独立）
+- [ ] `search --layer` 命令（BM25 only）
+- [ ] `rebuild` 命令
+- [ ] `layers` 命令
 
-### Phase 2: 向量搜索 + 实体
+### Phase 2: 向量搜索 + 召回融合
 
 - [ ] 远程嵌入 API 集成
-- [ ] `search --mode vector`
-- [ ] `search --mode hybrid`
-- [ ] 实体提取 + entities.toml
-- [ ] `omega-hpc stat`
+- [ ] Local CPU embedding via Candle
+- [ ] `search --mode vector` / `search --mode hybrid`
+- [ ] Recall Fusion（boost + priority 跨层合并）
+- [ ] `stat` 命令（按层统计）
+- [ ] HNSW vector store（可选）
 
 ### Phase 3: 记忆层 + SDK
 
-- [ ] `.hpc/mem/` 实现
-- [ ] `remember` 命令
-- [ ] `recall` 命令
-- [ ] `forget` 命令
+- [ ] Memory 类型层实现
+- [ ] `remember --layer` 命令
+- [ ] `recall --layer` 命令
+- [ ] `forget --layer` 命令
+- [ ] `extract_facts_from_conversation` SDK 方法
 - [ ] Rust SDK 发布
 - [ ] Session 管理 API
 
 ### Phase 4: 高级特性
 
 - [ ] 增量索引更新
-- [ ] `rebuild` 命令
+- [ ] `gc` 命令（按层回收）
 - [ ] 时间旅行
 - [ ] `eval` 评测命令
 
@@ -351,7 +423,7 @@ dim = 384
 
 **来源**: [Mem0 论文](https://arxiv.org/abs/2504.19413)，测试 AI Agent 在多轮多会话对话中记忆和检索用户信息的能力。
 
-**适配方式**: 本项目通过 SDK 提供对话记忆接口，调用方负责将对话内容写入 Mem 层，然后使用 LoCoMo 数据集评测 recall 的准确性。
+**适配方式**: 本项目通过 SDK 提供对话记忆接口，调用方负责将对话内容写入 memory 层，然后使用 LoCoMo 数据集评测 recall 的准确性。
 
 | 维度 | 说明 | 示例 |
 |------|------|------|
@@ -430,7 +502,8 @@ dim = 384
 |------|------|----------|
 | 远程 API 需网络 | 向量搜索离线不可用 | Candle 本地 fallback |
 | 向量维度不可混用 | 切换模型需重建索引 | `omega-hpc rebuild --full` |
-| Mem 层 recall 依赖 BM25 | 语义匹配不如向量 | Phase 2 为 Mem 添加向量索引 |
-| KB 无自动 gc | 磁盘可能膨胀 | `omega-hpc gc` 手动清理 |
+| Memory 层 recall 依赖 BM25 | 语义匹配不如向量 | Phase 2 为 Memory 层添加向量索引 |
+| Content 层无自动 gc | 磁盘可能膨胀 | `omega-hpc gc` 手动清理 |
 | tantivy 索引跨版本不兼容 | 升级 tantivy 需重建 | 文档标注版本要求 |
 | eval 依赖外部 LLM | 评测需网络和 API key | 可配置本地 LLM |
+| 层继承仅在配置加载时解析 | 运行时修改继承需重启 | 配置热重载为 Phase 2+ |

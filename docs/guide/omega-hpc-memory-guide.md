@@ -12,6 +12,8 @@ omega-hpc-memory 是统一记忆与知识库系统，服务于：
 
 **集成方式**：仅 CLI 和 SDK，不提供 MCP。
 
+**可配置数据层**：用户通过 `.hpc.toml` 定义数据层，每层有独立的索引策略和召回行为，支持继承。系统根据层配置提供个性化检索方案。
+
 ---
 
 ## Installation
@@ -26,24 +28,31 @@ cargo run --bin omega-hpc -- --help
 ## Quick Start
 
 ```bash
-# 1. 初始化项目记忆空间
-omega-hpc init
+# 1. 初始化（使用代码项目模板）
+omega-hpc init --template code
 
-# 2. 添加知识库内容
-omega-hpc add ./docs/ --recursive
-omega-hpc add . --glob "*.md"
+# 2. 查看层配置
+omega-hpc layers
 
-# 3. 搜索知识库
-omega-hpc search "omega-hpc 的设计原则"
+# 3. 添加内容到指定层
+omega-hpc add ./src/ --layer rust --recursive
+omega-hpc add ./docs/ --layer docs --recursive
+omega-hpc add docs/decisions/ --layer decisions
 
-# 4. 写入记忆
-omega-hpc remember "用户偏好 Rust" --type fact
-omega-hpc remember "选择了 Tantivy 因为零外部依赖" --type decision
+# 4. 搜索（跨层自动融合）
+omega-hpc search "为什么选择 Tantivy"
 
-# 5. 回忆记忆
+# 5. 搜索指定层
+omega-hpc search "fn main" --layer rust
+
+# 6. 写入记忆
+omega-hpc remember "用户偏好 Rust" --type fact --layer memory
+omega-hpc remember "选择了 Tantivy" --type decision
+
+# 7. 回忆记忆
 omega-hpc recall "上次为什么选了 Tantivy"
 
-# 6. 查看统计
+# 8. 查看统计
 omega-hpc stat
 ```
 
@@ -55,18 +64,238 @@ omega-hpc stat
 .hpc/
 ├── cortex/                    # 元认知索引
 │   ├── meta.toml              # 全局元数据
-│   ├── docs/                  # 按文档拆分的索引
-│   │   └── {doc_id}.toml
-│   ├── bm25/                  # tantivy 索引目录
+│   ├── layers/                # 按层拆分的索引
+│   │   ├── rust/
+│   │   │   ├── index.toml     # 层级文档清单
+│   │   │   ├── docs/          # 按文档拆分的索引
+│   │   │   └── bm25/          # tantivy 索引
+│   │   ├── docs/
+│   │   ├── decisions/
+│   │   └── memory/
 │   ├── entities.toml          # 实体槽位
-│   └── embeddings/            # 向量分片
-├── kb/                        # 知识库内容
-│   └── {sha256}.chunk
-├── mem/                       # Agent 记忆
-│   ├── sessions/
-│   └── users/
+│   └── embeddings/            # 向量分片（跨层共享）
+│
+├── layers/                    # 用户定义的数据层
+│   ├── rust/                  # content 层：chunk 存储
+│   │   └── {sha256}.chunk
+│   ├── docs/                  # content 层
+│   ├── decisions/             # content 层
+│   └── memory/                # memory 层：TOML 记忆
+│       ├── sessions/
+│       └── users/
+│
 └── sync/
     └── manifest.toml
+```
+
+---
+
+## Layer Configuration
+
+### 什么是 Layer
+
+Layer 是用户可配置的存储与检索单元。每个 Layer 描述一类数据的：
+- **索引方式** - 分块大小、策略、glob 模式
+- **存储方式** - content（文件分片）或 memory（结构化记忆）
+- **召回行为** - 优先级、boost 系数、检索策略
+
+### 层类型
+
+| 类型 | 存储方式 | 写入方式 | 查询方式 |
+|------|----------|----------|----------|
+| `content` | content-addressable chunk | `add` 命令 | `search` |
+| `memory` | TOML 文件 | `remember` / SDK | `recall` |
+
+### 定义层
+
+在 `.hpc.toml` 中添加 `[[layer]]` 段：
+
+```toml
+[[layer]]
+name = "code"
+description = "项目源代码"
+type = "content"
+priority = 1
+
+[layer.indexing]
+chunk_size = 1024
+glob = ["*.rs", "*.ts"]
+overlap = 64
+strategy = "line"
+embed = true
+
+[layer.recall]
+boost = 1.5
+max_results = 5
+strategy = "hybrid"
+weight_bm25 = 0.6
+weight_vector = 0.4
+```
+
+### 层继承
+
+子层通过 `extends` 继承父层配置，仅覆盖差异：
+
+```toml
+# 父层：抽象模板（abstract = true，不创建存储）
+[[layer]]
+name = "code"
+type = "content"
+abstract = true
+
+[layer.indexing]
+chunk_size = 1024
+overlap = 64
+strategy = "line"
+embed = true
+
+[layer.recall]
+boost = 1.5
+max_results = 5
+strategy = "hybrid"
+
+# 子层：仅覆盖 glob
+[[layer]]
+name = "rust"
+extends = "code"
+priority = 1
+
+[layer.indexing]
+glob = ["*.rs"]
+
+[[layer]]
+name = "python"
+extends = "code"
+priority = 1
+
+[layer.indexing]
+glob = ["*.py", "*.pyi"]
+```
+
+**继承规则**：
+- 标量：子覆盖父
+- 数组：子替换父
+- 表：递归合并
+- `abstract = true` 的层仅作模板，不可直接 `add` 或 `search`
+- 禁止循环继承
+
+### Init Templates
+
+```bash
+# 通用项目（kb + mem）
+omega-hpc init --template default
+
+# 代码密集项目（code→rust/python + docs + decisions + memory）
+omega-hpc init --template code
+
+# 轻量项目（single content + memory）
+omega-hpc init --template minimal
+```
+
+**`code` 模板生成的 `.hpc.toml`**：
+
+```toml
+[[layer]]
+name = "code"
+type = "content"
+abstract = true
+
+[layer.indexing]
+chunk_size = 1024
+overlap = 64
+strategy = "line"
+embed = true
+
+[layer.recall]
+boost = 1.5
+max_results = 5
+strategy = "hybrid"
+weight_bm25 = 0.6
+weight_vector = 0.4
+
+[[layer]]
+name = "rust"
+extends = "code"
+priority = 1
+
+[layer.indexing]
+glob = ["*.rs"]
+
+[[layer]]
+name = "python"
+extends = "code"
+priority = 1
+
+[layer.indexing]
+glob = ["*.py", "*.pyi"]
+
+[[layer]]
+name = "docs"
+type = "content"
+priority = 2
+
+[layer.indexing]
+chunk_size = 512
+glob = ["*.md", "*.txt"]
+embed = true
+
+[layer.recall]
+boost = 1.0
+max_results = 10
+strategy = "hybrid"
+
+[[layer]]
+name = "decisions"
+type = "content"
+priority = 0
+
+[layer.indexing]
+chunk_size = 256
+glob = ["docs/decisions/*.md"]
+embed = false
+
+[layer.recall]
+boost = 2.0
+max_results = 3
+strategy = "bm25"
+
+[[layer]]
+name = "memory"
+type = "memory"
+priority = 3
+
+[layer.recall]
+boost = 0.8
+max_results = 5
+strategy = "bm25"
+```
+
+### Recall Fusion
+
+跨层搜索时，系统自动合并多层结果：
+
+```
+1. 对每个目标层并行搜索
+2. 每层结果应用 boost 调分：hit.score *= layer.boost
+3. 每层截取至 max_results
+4. 合并所有层结果，按 score 降序排列
+5. score 相近（差距 < 5%）时按 priority 升序排
+6. 截取至全局 limit
+```
+
+**示例**：
+
+```
+$ omega-hpc search "为什么选择 Tantivy"
+
+Layer decisions (boost=2.0):
+  [0] 选择 Tantivy 作为 BM25 引擎 (score: 1.2)
+
+Layer rust (boost=1.5):
+  [1] use tantivy::Index; (score: 1.05)
+
+Layer docs (boost=1.0):
+  [2] Tantivy 是 Rust 全文搜索引擎 (score: 0.8)
 ```
 
 ---
@@ -79,15 +308,64 @@ omega-hpc stat
 omega-hpc init [OPTIONS] [PATH]
 ```
 
-初始化项目记忆空间。
+初始化项目记忆空间。根据模板创建 `.hpc.toml` 和 `.hpc/` 目录。
 
 Options:
 - `--path <PATH>` 路径 (default: `.hpc`)
 - `--force` 强制覆盖
+- `--template <NAME>` 模板: `default`, `code`, `minimal`
 
 ```bash
 omega-hpc init
-omega-hpc init --path /path/to/project/.hpc
+omega-hpc init --template code
+omega-hpc init --path /path/to/project/.hpc --template minimal
+```
+
+### layers
+
+```bash
+omega-hpc layers [OPTIONS]
+```
+
+列出或验证层配置。
+
+Options:
+- （无参数）列出所有层及其配置摘要
+- `--verbose` 显示完整配置（含继承解析后的值）
+- `--validate` 验证层配置完整性
+
+```bash
+$ omega-hpc layers
+
+Layer           Type     Priority  Boost  Strategy  Chunk Size
+code            content  -         1.5    hybrid    1024       (abstract)
+rust            content  1         1.5    hybrid    1024
+python          content  1         1.5    hybrid    1024
+docs            content  2         1.0    hybrid    512
+decisions       content  0         2.0    bm25      256
+memory          memory   3         0.8    bm25      -
+
+$ omega-hpc layers --verbose
+
+[rust]
+  description: (none)
+  type: content
+  priority: 1
+  extends: code
+  abstract: false
+  indexing:
+    chunk_size: 1024
+    glob: ["*.rs"]
+    overlap: 64
+    strategy: line
+    embed: true
+  recall:
+    boost: 1.5
+    max_results: 5
+    strategy: hybrid
+    weight_bm25: 0.6
+    weight_vector: 0.4
+...
 ```
 
 ### add
@@ -96,17 +374,21 @@ omega-hpc init --path /path/to/project/.hpc
 omega-hpc add [OPTIONS] <PATH>
 ```
 
-添加知识库内容。
+添加内容到指定层。
 
 Options:
+- `--layer <NAME>` 目标层 (default: 按 glob 匹配第一个 content 层)
 - `--recursive, -r` 递归
-- `--glob <PATTERN>` 文件过滤
-- `--chunk-size <N>` 分块大小 (default: 512)
+- `--glob <PATTERN>` 文件过滤（覆盖层配置中的 glob）
+- `--chunk-size <N>` 分块大小（覆盖层配置）
 
 ```bash
-omega-hpc add ./docs/ --recursive
-omega-hpc add . --glob "*.md" --glob "*.txt"
+omega-hpc add ./src/ --layer rust --recursive
+omega-hpc add ./docs/ --layer docs --recursive
+omega-hpc add . --layer docs --glob "*.md" --glob "*.txt"
 ```
+
+**注意**：不能向 `abstract = true` 或 `memory` 类型的层添加内容。
 
 ### search
 
@@ -114,15 +396,23 @@ omega-hpc add . --glob "*.md" --glob "*.txt"
 omega-hpc search [OPTIONS] <QUERY>
 ```
 
-混合检索知识库。
+检索知识库。跨层搜索时使用 Recall Fusion 合并结果。
 
 Options:
+- `--layer <NAME>` 指定层（可多次使用），默认搜索所有 content 层
 - `--limit, -n <N>` 结果数量 (default: 10)
 - `--mode <MODE>` 模式: `hybrid`, `bm25`, `vector`
 - `--format <FMT>` 格式: `json`, `table`, `simple`
 
 ```bash
+# 跨层搜索（自动融合）
 omega-hpc search "持久化记忆系统设计"
+
+# 指定层搜索
+omega-hpc search "fn main" --layer rust
+omega-hpc search "架构决策" --layer decisions --layer docs
+
+# 搜索模式
 omega-hpc search "Rust" --mode bm25
 omega-hpc search "架构设计" --mode vector
 ```
@@ -136,6 +426,7 @@ omega-hpc recall [OPTIONS] <QUERY>
 回忆 Agent 记忆。
 
 Options:
+- `--layer <NAME>` 指定 memory 层（可多次使用），默认搜索所有 memory 层
 - `--session <ID>` 限定会话
 - `--user <ID>` 限定用户
 - `--type <TYPE>` 类型: `fact`, `decision`, `all`
@@ -143,6 +434,7 @@ Options:
 ```bash
 omega-hpc recall "用户偏好"
 omega-hpc recall "架构决策" --type decision
+omega-hpc recall "上次讨论" --layer memory
 ```
 
 ### remember
@@ -151,16 +443,17 @@ omega-hpc recall "架构决策" --type decision
 omega-hpc remember <CONTENT> [OPTIONS]
 ```
 
-写入记忆。
+写入记忆到指定 memory 层。
 
 Options:
+- `--layer <NAME>` 目标 memory 层 (default: 第一个 memory 层)
 - `--type <TYPE>` 类型: `fact`, `decision`
 - `--confidence <N>` 置信度 (default: 0.9)
 - `--session <ID>` 关联会话
 - `--user <ID>` 关联用户
 
 ```bash
-omega-hpc remember "用户偏好 Rust" --type fact
+omega-hpc remember "用户偏好 Rust" --type fact --layer memory
 omega-hpc remember "选择了 Tantivy" --type decision --confidence 0.95
 ```
 
@@ -176,10 +469,11 @@ omega-hpc find --regex <PATTERN>
 Options:
 - `--case-sensitive` 区分大小写
 - `--context <N>` 上下文行数
+- `--layer <NAME>` 指定层
 
 ```bash
 omega-hpc find --exact "omega-hpc"
-omega-hpc find --regex "omega-.*-prd"
+omega-hpc find --regex "omega-.*-prd" --layer docs
 ```
 
 ### forget
@@ -191,38 +485,56 @@ omega-hpc forget [OPTIONS]
 删除记忆或索引。
 
 Options:
+- `--layer <NAME>` 指定层
 - `--doc <ID>` 删除文档索引
 - `--fact <ID>` 删除事实
 - `--session <ID>` 删除会话
 - `--entity <NAME>` 删除实体
 
 ```bash
-omega-hpc forget --fact fact_001
+omega-hpc forget --fact fact_001 --layer memory
+omega-hpc forget --doc doc_001 --layer rust
 omega-hpc forget --session sess_20260410_001
 ```
 
 ### stat
 
 ```bash
-omega-hpc stat
+omega-hpc stat [OPTIONS]
 ```
 
 显示统计。
 
-```
+Options:
+- `--layer <NAME>` 指定层（默认显示所有层）
+
+```bash
+$ omega-hpc stat
+
 Omega HPC Memory Statistics
 ===========================
 Cortex:
-  Documents: 42
-  Chunks: 1,247
+  Layers: 5 (3 content, 1 memory, 1 abstract)
+  Total Docs: 42
+  Total Chunks: 1,247
   Entities: 156
-  Index Size: 2.4 MB
 
-Knowledge Base:
-  Content Chunks: 1,247
-  Total Size: 4.8 MB
+Layer: rust (content, priority 1)
+  Documents: 15
+  Chunks: 342
+  Index Size: 1.2 MB
 
-Memory:
+Layer: docs (content, priority 2)
+  Documents: 20
+  Chunks: 580
+  Index Size: 0.8 MB
+
+Layer: decisions (content, priority 0)
+  Documents: 7
+  Chunks: 45
+  Index Size: 0.2 MB
+
+Layer: memory (memory, priority 3)
   Sessions: 12
   Facts: 89
   Decisions: 34
@@ -237,11 +549,11 @@ omega-hpc rebuild [OPTIONS]
 重建索引。
 
 Options:
-- `--cortex` 仅重建 cortex
-- `--kb` 仅重建 kb
+- `--layer <NAME>` 仅重建指定层
 - `--full` 全部重建
 
 ```bash
+omega-hpc rebuild --layer rust
 omega-hpc rebuild --full
 ```
 
@@ -251,20 +563,17 @@ omega-hpc rebuild --full
 omega-hpc gc [OPTIONS]
 ```
 
-垃圾回收，清理 KB 层中未被引用的孤立 chunk 文件。
+垃圾回收，清理各 content 层中未被索引引用的孤立 chunk 文件。
 
 Options:
+- `--layer <NAME>` 仅清理指定层（默认所有 content 层）
 - `--dry-run` 仅报告可回收空间，不执行删除（默认行为）
 - `--all` 同时清理 Cortex 中 stale 索引条目
 
 ```bash
-# 查看可回收空间
 omega-hpc gc --dry-run
-
-# 执行清理
 omega-hpc gc
-
-# 同时清理 stale 索引
+omega-hpc gc --layer rust
 omega-hpc gc --all
 ```
 
@@ -316,33 +625,44 @@ omega-hpc eval --benchmark locomo --dataset ./benchmarks/locomo/
 ### Rust SDK
 
 ```rust
-use omega_hpc_memory::{MemoryStore, SearchEngine, Indexer};
+use omega_hpc_memory::{LayerRegistry, MemoryStore, SearchEngine, Indexer};
 
 fn main() -> Result<()> {
-    // 初始化
-    let mut indexer = Indexer::new(".hpc")?;
-    let search = SearchEngine::new(".hpc")?;
-    let mut mem = MemoryStore::new(".hpc/mem")?;
+    let config = HpcConfig::load(".hpc.toml")?;
+    let registry = LayerRegistry::from_config(&config)?;
 
-    // 添加文档
-    indexer.add_directory("./docs/", &glob("*.md"))?;
+    // 按层添加文档
+    let mut indexer = Indexer::new(".hpc", &registry)?;
+    indexer.add_directory("./src/", "rust")?;
+    indexer.add_directory("./docs/", "docs")?;
 
-    // 搜索
-    let results = search.search("架构设计", SearchMode::Hybrid)?;
+    // 跨层搜索（自动 fusion）
+    let search = SearchEngine::new(".hpc", &registry)?;
+    let results = search.search_all("架构设计", 10)?;
     for hit in results {
-        println!("{:?}", hit);
+        println!("[{}] {} (score: {:.2})", hit.layer, hit.content, hit.score);
     }
 
-    // 写入记忆
+    // 单层搜索
+    let code_results = search.search_layer("fn main", "rust", 5)?;
+
+    // 写入记忆到指定层
+    let mut mem = MemoryStore::new("memory", &registry)?;
     mem.save_fact(Fact {
         content: "用户偏好 Rust".into(),
         confidence: 0.95,
     })?;
 
     // 回忆记忆
-    let memories = mem.recall("用户偏好")?;
-    for mem in memories {
-        println!("{:?}", mem);
+    let memories = mem.recall("用户偏好", 5)?;
+    for m in memories {
+        println!("{:?}", m);
+    }
+
+    // 对话提取
+    let extracted = mem.extract_facts_from_conversation(&messages)?;
+    for fact in extracted.facts {
+        mem.save_fact(&fact)?;
     }
 
     Ok(())
@@ -353,14 +673,11 @@ fn main() -> Result<()> {
 
 ## Configuration
 
-`.hpc.toml`:
+### `.hpc.toml` 完整示例
 
 ```toml
 [hpc]
 cortex_path = ".hpc"
-
-[indexing]
-chunk_size = 512
 
 [embedding]
 provider = "openai"           # openai | cohere | local
@@ -368,7 +685,7 @@ model = "text-embedding-3-small"
 api_key = "${OPENAI_API_KEY}"
 
 [embedding.local]
-model = "sentence-transformers/all-MiniLM-L6-v2"  # Candle 加载
+model = "sentence-transformers/all-MiniLM-L6-v2"
 dim = 384
 cache_dir = "~/.cache/omega-hpc/models"
 
@@ -379,7 +696,112 @@ dim = 1536
 [search]
 default_limit = 10
 hybrid_alpha = 0.7
+
+[[layer]]
+name = "code"
+type = "content"
+abstract = true
+
+[layer.indexing]
+chunk_size = 1024
+overlap = 64
+strategy = "line"
+embed = true
+
+[layer.recall]
+boost = 1.5
+max_results = 5
+strategy = "hybrid"
+weight_bm25 = 0.6
+weight_vector = 0.4
+
+[[layer]]
+name = "rust"
+extends = "code"
+priority = 1
+
+[layer.indexing]
+glob = ["*.rs"]
+
+[[layer]]
+name = "python"
+extends = "code"
+priority = 1
+
+[layer.indexing]
+glob = ["*.py", "*.pyi"]
+
+[[layer]]
+name = "docs"
+type = "content"
+priority = 2
+
+[layer.indexing]
+chunk_size = 512
+glob = ["*.md", "*.txt"]
+embed = true
+
+[layer.recall]
+boost = 1.0
+max_results = 10
+strategy = "hybrid"
+
+[[layer]]
+name = "decisions"
+type = "content"
+priority = 0
+
+[layer.indexing]
+chunk_size = 256
+glob = ["docs/decisions/*.md"]
+embed = false
+
+[layer.recall]
+boost = 2.0
+max_results = 3
+strategy = "bm25"
+
+[[layer]]
+name = "memory"
+type = "memory"
+priority = 3
+
+[layer.recall]
+boost = 0.8
+max_results = 5
+strategy = "bm25"
 ```
+
+### Layer 配置字段参考
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `name` | string | 是 | 唯一标识符，用于 CLI `--layer` 和目录名 |
+| `description` | string | 否 | 人类可读描述 |
+| `type` | enum | 是 | `content` 或 `memory` |
+| `abstract` | bool | 否 | `true` 则不创建存储，仅作继承模板 |
+| `extends` | string | 否 | 父层名称，继承全部配置 |
+| `priority` | u32 | 是 | 召回优先级，数字越小越优先（0 最高） |
+
+### Indexing 配置（content 类型）
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `chunk_size` | u32 | 512 | 分块大小（tokens） |
+| `glob` | string[] | ["*"] | 文件匹配模式 |
+| `overlap` | u32 | 0 | 分块重叠（tokens） |
+| `strategy` | enum | "fixed" | `fixed`、`line`、`paragraph` |
+| `embed` | bool | true | 是否生成向量嵌入 |
+
+### Recall 配置
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `boost` | f32 | 1.0 | 分数放大系数 |
+| `max_results` | u32 | 10 | 单层最大返回数 |
+| `strategy` | enum | "hybrid" | `bm25`、`vector`、`hybrid` |
+| `weight_bm25` | f32 | 0.5 | hybrid 模式 BM25 权重 |
+| `weight_vector` | f32 | 0.5 | hybrid 模式向量权重 |
 
 ### Embedding Modes
 
@@ -395,49 +817,42 @@ hybrid_alpha = 0.7
 
 ### Recall Mechanism
 
-`recall` 命令使用 Mem 层独立的 BM25 索引：
-1. `remember` 写入时同时索引到 Mem 层 BM25
+`recall` 命令使用 memory 层独立的 BM25 索引：
+1. `remember` 写入时同时索引到该层的 BM25
 2. `recall` 查询通过 BM25 检索候选记忆
-3. Phase 2 后可为 Mem 层添加向量索引，提升语义匹配
-
-### Conversation Fact Extraction (SDK)
-
-```rust
-use omega_hpc_memory::MemoryStore;
-
-let mem = MemoryStore::new(".hpc/mem")?;
-let extracted = mem.extract_facts_from_conversation(&messages)?;
-// extracted.facts: Vec<ExtractedFact>
-// extracted.decisions: Vec<ExtractedDecision>
-// 调用方确认后显式写入
-for fact in extracted.facts {
-    mem.save_fact(&fact)?;
-}
-```
+3. Phase 2 后可为 memory 层添加向量索引，提升语义匹配
 
 ---
 
 ## Tips
 
+### 层设计
+
+1. **代码项目**：使用 `code` 模板，按语言拆分子层（rust/python），继承共享配置
+2. **高优先级层**：将关键数据设为 priority 0 + 高 boost，确保排名靠前
+3. **轻量层**：不嵌入的层设 `embed = false`，减少 API 调用
+4. **抽象模板**：多项目共享基础配置时用 `abstract = true` + `extends`
+
 ### 性能
 
-1. **批量添加**: 多次 `add` 增量索引
-2. **BM25 vs Vector**: 关键词用 BM25，语义用 Vector
-3. **离线使用**: `--provider local` 使用 Candle 本地嵌入
+1. **单层搜索**：指定 `--layer` 比跨层搜索更快
+2. **BM25 vs Vector**：关键词用 BM25，语义用 Vector
+3. **离线使用**：`--provider local` 使用 Candle 本地嵌入
 
 ### 调试
 
-1. `omega-hpc stat` 查看状态
-2. `omega-hpc rebuild --full` 重建索引
-3. `--format json` 获取完整数据
-4. `omega-hpc gc --dry-run` 查看可回收空间
+1. `omega-hpc layers` 查看层配置和继承关系
+2. `omega-hpc layers --validate` 检查配置错误
+3. `omega-hpc stat` 查看各层统计
+4. `omega-hpc rebuild --layer <name>` 重建单层索引
+5. `omega-hpc gc --dry-run` 查看可回收空间
 
 ### 记忆管理
 
-1. **显式写入**: `remember` 命令需要显式调用
-2. **会话关联**: 用 `--session` 关联记忆到会话
-3. **手动清理**: `forget` 命令删除过期记忆
-4. **对话提取**: SDK 提供 `extract_facts_from_conversation`，由调用方决定何时调用
+1. **显式写入**：`remember` 命令需要显式调用
+2. **会话关联**：用 `--session` 关联记忆到会话
+3. **手动清理**：`forget` 命令删除过期记忆
+4. **对话提取**：SDK 提供 `extract_facts_from_conversation`，由调用方决定何时调用
 
 ---
 
@@ -445,13 +860,27 @@ for fact in extracted.facts {
 
 ### 搜索无结果
 
-1. `omega-hpc stat` 确认已添加文档
-2. `omega-hpc add ./docs/` 重新添加
-3. 尝试 `--mode bm25`
+1. `omega-hpc layers` 确认层配置
+2. `omega-hpc stat` 确认已添加文档到对应层
+3. `omega-hpc add ./src/ --layer rust` 重新添加
+4. 尝试 `--mode bm25`
+
+### 层配置错误
+
+```bash
+omega-hpc layers --validate
+```
+
+常见问题：
+- `abstract` 层不能直接用于 `add` 或 `search`
+- `extends` 指向不存在的层名
+- 循环继承
+- `memory` 类型的层没有 `indexing` 配置
 
 ### 索引损坏
 
 ```bash
+omega-hpc rebuild --layer <name>
 omega-hpc rebuild --full
 ```
 
@@ -465,14 +894,11 @@ omega-hpc rebuild --full
 ### 磁盘空间持续增长
 
 ```bash
-# 查看可回收空间
 omega-hpc gc --dry-run
-
-# 执行清理
 omega-hpc gc
 ```
 
-KB 层使用 content-addressable 存储，文件修改后产生新 chunk，旧 chunk 需通过 `gc` 清理。
+Content 层使用 content-addressable 存储，文件修改后产生新 chunk，旧 chunk 需通过 `gc` 清理。
 
 ### 切换嵌入模型后搜索异常
 
@@ -489,34 +915,38 @@ omega-hpc rebuild --full
 |------|------|----------|
 | 远程 API 需网络 | 向量搜索离线不可用 | Candle 本地 fallback |
 | 向量维度不可混用 | 切换模型需重建索引 | `omega-hpc rebuild --full` |
-| Mem 层 recall 依赖 BM25 | 语义匹配不如向量 | Phase 2 为 Mem 添加向量索引 |
-| KB 无自动 gc | 磁盘可能膨胀 | `omega-hpc gc` 手动清理 |
+| Memory 层 recall 依赖 BM25 | 语义匹配不如向量 | Phase 2 添加向量索引 |
+| Content 层无自动 gc | 磁盘可能膨胀 | `omega-hpc gc` 手动清理 |
 | tantivy 索引跨版本不兼容 | 升级 tantivy 需重建 | 文档标注版本要求 |
 | eval 依赖外部 LLM | 评测需网络和 API key | 可配置本地 LLM |
+| 层继承仅在配置加载时解析 | 运行时修改继承需重启 | 配置热重载为 Phase 2+ |
 
 ---
 
-## Memory Layer vs Knowledge Layer
+## Content Layer vs Memory Layer
 
 | 命令 | 作用于 | 用途 |
 |------|--------|------|
-| `add` | KB 层 | 添加文档到知识库 |
-| `search` | KB 层 | 检索知识库文档 |
-| `remember` | Mem 层 | 写入 Agent 记忆 |
-| `recall` | Mem 层 | 回忆 Agent 记忆 |
+| `add --layer <name>` | content 层 | 添加文档到知识库 |
+| `search --layer <name>` | content 层 | 检索知识库文档 |
+| `remember --layer <name>` | memory 层 | 写入 Agent 记忆 |
+| `recall --layer <name>` | memory 层 | 回忆 Agent 记忆 |
 
 **示例**：
 
 ```bash
-# 添加文档到知识库
-omega-hpc add ./docs/
+# 添加源代码到 rust 层
+omega-hpc add ./src/ --layer rust --recursive
 
-# 搜索知识库（问项目有什么）
+# 搜索所有 content 层（自动融合）
 omega-hpc search "架构设计原则"
 
-# 写入记忆（记下 Agent 的决策）
-omega-hpc remember "选择了 Rust 因为性能"
+# 搜索指定层
+omega-hpc search "fn main" --layer rust
 
-# 回忆记忆（问 Agent 上次怎么决策的）
+# 写入记忆到 memory 层
+omega-hpc remember "选择了 Rust 因为性能" --layer memory
+
+# 回忆记忆
 omega-hpc recall "为什么选择 Rust"
 ```
