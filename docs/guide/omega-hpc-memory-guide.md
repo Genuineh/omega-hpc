@@ -1,7 +1,5 @@
 # Omega HPC Memory CLI Guide
 
-**版本**: v2
-
 ---
 
 ## Overview

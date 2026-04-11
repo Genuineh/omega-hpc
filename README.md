@@ -16,14 +16,13 @@ omega-hpc/
 │   ├── prds/               # 产品需求文档
 │   ├── specs/              # 技术规格
 │   ├── guide/              # 使用指南
-│   └── archive/            # 历史文档
 ├── crates/                 # Rust workspace (规划中)
 └── skills/                 # AI Agent 操作指南
 ```
 
 ## 核心组件
 
-### Omega HPC Memory (v2)
+### Omega HPC Memory
 
 统一记忆与知识库系统，同时服务于：
 - **Agent 长期记忆** - 跨会话保留决策、偏好
@@ -67,8 +66,3 @@ omega-hpc recall <query>    # 回忆记忆
 ## 状态
 
 项目规划阶段 - 参见 [docs/TODO.md](docs/TODO.md)
-
-## 版本历史
-
-- **v2** (当前): 多文件分层架构，CLI + SDK 集成
-- [v1 (归档)](docs/archive/omega-hpc-memory-prd-v1.md): 单文件架构设计

@@ -1,6 +1,5 @@
 # Omega HPC Memory: Unified Memory and Knowledge Base System
 
-**版本**: v2  
 **状态**: Active
 
 ---

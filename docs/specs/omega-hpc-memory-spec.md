@@ -1,6 +1,5 @@
 # Omega HPC Memory Technical Specification
 
-**版本**: v2  
 **状态**: Active
 
 ---

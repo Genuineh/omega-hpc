@@ -2,7 +2,7 @@
 
 ## Active
 
-- [ ] **omega-hpc-memory**: Unified memory and knowledge base system (v2)
+- [ ] **omega-hpc-memory**: Unified memory and knowledge base system
 
 ### Phase 1: Foundation + Knowledge Index (MVP)
 - [ ] Create project structure
@@ -45,11 +45,11 @@
 ## Completed
 
 - [x] Create project documentation structure
-- [x] Write v2 PRD (multi-file layered architecture)
-- [x] Write v2 Spec (layer boundaries defined)
-- [x] Write v2 Guide (commands + SDK)
+- [x] Write PRD (multi-file layered architecture)
+- [x] Write Spec (layer boundaries defined)
+- [x] Write Guide (commands + SDK)
 
-## Key Design Decisions (v2)
+## Key Design Decisions
 
 ### Architecture
 - **Multi-file layered** instead of single file
@@ -81,7 +81,3 @@
 
 - MCP service (explicitly not providing)
 - Local embedding (ONNX deps conflict with zero-dependency goal)
-
-## Archive
-
-- [v1 design](./archive/omega-hpc-memory-prd-v1.md) - Initial monolithic single-file design
