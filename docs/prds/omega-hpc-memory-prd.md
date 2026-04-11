@@ -183,13 +183,31 @@ session.end()?;
 
 - **显式触发**：用户或 Agent 调用 `remember` 命令
 - **会话结束**：自动生成会话摘要（如果启用）
-- **定时归档**：可选，定期将短期记忆归档为长期记忆
+- **对话提取**：SDK 提供 `extract_facts_from_conversation` 方法，由调用方决定何时调用
+
+### 对话记忆提取管道
+
+为支持 LoCoMo 等对话记忆评测场景，SDK 提供对话 → 结构化记忆的提取接口：
+
+```
+对话历史 → [LLM 提取] → 结构化 facts/decisions → 写入 .hpc/mem/
+```
+
+**提取流程**：
+1. 调用方传入对话消息列表
+2. SDK 使用 LLM 提取关键 facts 和 decisions
+3. 返回提取结果供调用方确认或修改
+4. 调用方确认后写入 Mem 层
+
+**LLM 依赖**：
+- 提取质量取决于 LLM 能力
+- 支持配置不同 LLM 提供者（OpenAI/本地）
+- 本地模式可使用 Candle 运行小型模型（质量降低但离线可用）
 
 ### 不做的事
 
 - 不会自动监听对话并提取记忆（需要显式调用）
 - 不会在后台运行 LLM 进行摘要（由调用方负责）
-- 不会自动清理过期记忆（由用户决定）
 
 ---
 
@@ -203,25 +221,34 @@ session.end()?;
 | 索引格式 | TOML + 二进制 | TOML 可 diff，二进制高效 |
 | KB 内容 | Content-addressable | Hash 寻址，防篡改，可去重 |
 | 向量存储 | 可插拔 | 支持 flat/HNSW |
-| 嵌入模型 | **仅支持远程 API** | 避免 ONNX C 库依赖 |
+| 嵌入模型 | **远程优先 + 本地 fallback** | 远程高质量，Candle 本地离线可用 |
 | CLI/SDK | 仅这两者 | 不提供 MCP 服务 |
 
 ### 嵌入模型选择
 
-**明确：仅支持远程 API（Phase 2）**
+**双模式：远程 API 优先 + 本地 CPU fallback**
 
 | 方案 | 状态 | 说明 |
 |------|------|------|
-| ONNX 本地 | **不采用** | ort crate 需要 C 库依赖，违反"零外部依赖" |
-| Candle/burn | **不采用** | 生态不成熟，功能有限 |
-| 远程 API | **采用** | OpenAI/Cohere 等，零本地依赖 |
+| 远程 API | **主模式** | OpenAI/Cohere，最高质量，需网络 |
+| Candle 本地 | **fallback** | 纯 Rust，CPU 运行，离线可用 |
 
 ```toml
 [embedding]
-provider = "openai"           # 唯一选项
+provider = "openai"           # openai | cohere | local
 model = "text-embedding-3-small"
 api_key = "${OPENAI_API_KEY}"
+
+[embedding.local]
+model = "sentence-transformers/all-MiniLM-L6-v2"  # Candle 加载
+dim = 384
 ```
+
+**本地模式说明**：
+- 使用 [Candle](https://github.com/huggingface/candle) (HuggingFace 纯 Rust ML 框架) 运行小型 embedding 模型
+- 仅需 CPU，无 CUDA/MKL/ONNX 依赖
+- 模型约 80MB，首次下载后缓存本地
+- 质量：384 维 vs 远程 1536 维，语义匹配略低但完全可用
 
 ### 向量存储选择
 
@@ -394,3 +421,16 @@ api_key = "${OPENAI_API_KEY}"
 
 - `docs/specs/omega-hpc-memory-spec.md` - 详细技术规格
 - `docs/guide/omega-hpc-memory-guide.md` - 使用指南
+
+---
+
+## Known Limitations
+
+| 限制 | 影响 | 缓解措施 |
+|------|------|----------|
+| 远程 API 需网络 | 向量搜索离线不可用 | Candle 本地 fallback |
+| 向量维度不可混用 | 切换模型需重建索引 | `omega-hpc rebuild --full` |
+| Mem 层 recall 依赖 BM25 | 语义匹配不如向量 | Phase 2 为 Mem 添加向量索引 |
+| KB 无自动 gc | 磁盘可能膨胀 | `omega-hpc gc` 手动清理 |
+| tantivy 索引跨版本不兼容 | 升级 tantivy 需重建 | 文档标注版本要求 |
+| eval 依赖外部 LLM | 评测需网络和 API key | 可配置本地 LLM |

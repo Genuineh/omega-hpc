@@ -48,30 +48,40 @@ omega-hpc-memory 是统一记忆与知识库系统，同时服务于：
 
 **存储**：索引数据，不存储原始内容
 
-```toml
-# index.toml
-version = "1.0"
+目录结构（按文档拆分，避免单文件膨胀）：
 
-[meta]
+```
+cortex/
+├── meta.toml              # 全局元数据
+├── docs/
+│   ├── doc_001.toml       # 单文档索引
+│   └── doc_002.toml
+├── bm25/                  # tantivy 索引目录
+│   └── ...                # tantivy 自管理
+├── entities.toml          # 实体槽位
+└── embeddings/
+    └── shard_*.bin
+```
+
+```toml
+# meta.toml
+version = "1.0"
 created_at = "2026-04-10T00:00:00Z"
 updated_at = "2026-04-10T00:00:00Z"
+total_docs = 42
 total_chunks = 1247
 total_entities = 156
+```
 
-[[documents]]
+```toml
+# docs/doc_001.toml
 id = "doc_001"
 path = "docs/TODO.md"
 mime_type = "text/markdown"
-content_hash = "sha256:abc123..."  # 指向 KB 层
-chunk_ids = ["chunk_001", "chunk_002"]
+content_hash = "sha256:abc123..."
 chunk_count = 2
-status = "active"  # active | stale
-
-[[entities]]
-name = "omega-hpc"
-type = "project"
-slots = { description = "AI Agent 操作平台" }
-related_chunks = ["chunk_010"]
+status = "active"
+chunks = ["chunk_001", "chunk_002"]
 ```
 
 #### Knowledge Layer (`.hpc/kb/`)
@@ -183,9 +193,17 @@ pub enum SearchMode {
 
 ### 3. MemoryStore
 
+Mem 层使用独立的 BM25 索引（轻量 tantivy index）实现 recall 查询：
+
+**recall 实现机制**：
+1. 每次 `remember` 写入时，同时将内容索引到 Mem 层的 BM25
+2. `recall` 查询先经过 BM25 检索候选记忆
+3. Phase 2 后可为 Mem 层添加向量索引，提升语义匹配
+
 ```rust
 pub struct MemoryStore {
     mem_path: PathBuf,
+    bm25_index: tantivy::Index,  // Mem 层独立 BM25 索引
 }
 
 impl MemoryStore {
@@ -196,6 +214,37 @@ impl MemoryStore {
     pub fn get_session(&self, session_id: &str) -> Result<Session>;
 }
 ```
+
+### 4. extract_facts_from_conversation 行为契约
+
+**输入**：`Vec<Message>` - 对话消息列表（role + content）
+
+**输出**：`ExtractedMemories` - 提取的结构化记忆
+
+```rust
+pub struct ExtractedMemories {
+    pub facts: Vec<ExtractedFact>,
+    pub decisions: Vec<ExtractedDecision>,
+}
+
+pub struct ExtractedFact {
+    pub content: String,
+    pub confidence: f32,
+}
+
+pub struct ExtractedDecision {
+    pub content: String,
+    pub context: String,
+}
+```
+
+**LLM 配置**：
+- 使用配置中的 LLM 提供者（复用 embedding 或独立配置）
+- 内置提取 prompt 模板，支持自定义覆盖
+- 提取结果返回给调用方，不自动写入（调用方需显式 `save_fact` / `save_decision`）
+
+**离线模式**：
+- 远程 LLM 不可用时，可降级到基于规则的关键句提取（质量降低但可用）
 
 ### 4. EmbeddingClient Trait
 
@@ -315,6 +364,29 @@ Options:
 - `--kb` 仅重建 kb
 - `--full` 全部重建
 
+### gc
+
+```bash
+omega-hpc gc [OPTIONS]
+```
+
+垃圾回收，清理 KB 层中未被 Cortex 索引引用的孤立 chunk 文件。
+
+Options:
+- `--dry-run` 仅报告可回收空间，不执行删除
+- `--all` 同时清理 Cortex 中标记为 stale 的索引条目
+
+**回收策略**：
+1. 扫描 `.hpc/kb/` 中所有 chunk 文件
+2. 交叉比对 Cortex 中 `content_hash` 引用
+3. 无引用的 chunk 标记为可回收
+4. 删除可回收 chunk 并报告释放空间
+
+**安全保证**：
+- 默认 dry-run 模式，需显式去掉 `--dry-run` 才执行删除
+- 被活跃索引引用的 chunk 不会被误删
+- 删除前记录日志到 `.hpc/sync/manifest.toml`
+
 ### eval
 
 ```bash
@@ -332,27 +404,49 @@ Options:
 
 ## Embedding Integration
 
-### Remote API Only (Phase 2)
+### Dual Mode: Remote API + Local CPU Fallback
 
 ```toml
 [embedding]
-provider = "openai"
+provider = "openai"           # openai | cohere | local
 model = "text-embedding-3-small"
 api_key = "${OPENAI_API_KEY}"
+
+[embedding.local]
+model = "sentence-transformers/all-MiniLM-L6-v2"
+dim = 384
+cache_dir = "~/.cache/omega-hpc/models"
 ```
 
-**明确**：
-- 不支持本地 ONNX（ort crate 有 C 库依赖）
-- 不支持 Candle/burn（生态不成熟）
-- 仅支持远程 API
+**Fallback 策略**：
+1. 优先使用配置的远程 provider
+2. 远程不可用时（网络错误/API 限流）自动 fallback 到 local
+3. 可通过 `--provider local` 强制使用本地模式
+
+### Local Mode Details
+
+使用 [Candle](https://github.com/huggingface/candle) (HuggingFace 纯 Rust ML 框架)：
+
+| 属性 | 值 |
+|------|-----|
+| 默认模型 | all-MiniLM-L6-v2 |
+| 向量维度 | 384 |
+| 模型大小 | ~80MB |
+| 依赖 | 纯 Rust，无 CUDA/MKL/ONNX |
+| 首次运行 | 下载模型到 cache_dir |
+| CPU 性能 | ~50 embeddings/sec |
 
 ### Supported Providers
 
-| Provider | Status | Models |
-|----------|--------|--------|
-| OpenAI | Phase 1 | text-embedding-3-small, text-embedding-3-large |
-| Cohere | Phase 2 | embed-english-v3.0, embed-multilingual-v3.0 |
-| Local | **不支持** | - |
+| Provider | Status | Models | Dim |
+|----------|--------|--------|-----|
+| OpenAI | Phase 2 | text-embedding-3-small/large | 1536/3072 |
+| Cohere | Phase 2 | embed-english-v3.0 | 1024 |
+| Local (Candle) | Phase 2 | all-MiniLM-L6-v2 | 384 |
+
+**已知限制**：
+- 本地模型 (384 dim) vs 远程 (1536 dim) 语义质量有差距
+- 切换 provider 导致向量维度变化，需 `omega-hpc rebuild --full`
 
 ---
 

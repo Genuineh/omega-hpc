@@ -53,13 +53,16 @@ omega-hpc stat
 
 ```
 .hpc/
-├── cortex/            # 元认知索引
-│   ├── index.toml
-│   ├── bm25.bin
-│   └── embeddings/
-├── kb/               # 知识库内容
-│   └── *.chunk
-├── mem/              # Agent 记忆
+├── cortex/                    # 元认知索引
+│   ├── meta.toml              # 全局元数据
+│   ├── docs/                  # 按文档拆分的索引
+│   │   └── {doc_id}.toml
+│   ├── bm25/                  # tantivy 索引目录
+│   ├── entities.toml          # 实体槽位
+│   └── embeddings/            # 向量分片
+├── kb/                        # 知识库内容
+│   └── {sha256}.chunk
+├── mem/                       # Agent 记忆
 │   ├── sessions/
 │   └── users/
 └── sync/
@@ -242,6 +245,29 @@ Options:
 omega-hpc rebuild --full
 ```
 
+### gc
+
+```bash
+omega-hpc gc [OPTIONS]
+```
+
+垃圾回收，清理 KB 层中未被引用的孤立 chunk 文件。
+
+Options:
+- `--dry-run` 仅报告可回收空间，不执行删除（默认行为）
+- `--all` 同时清理 Cortex 中 stale 索引条目
+
+```bash
+# 查看可回收空间
+omega-hpc gc --dry-run
+
+# 执行清理
+omega-hpc gc
+
+# 同时清理 stale 索引
+omega-hpc gc --all
+```
+
 ### eval
 
 ```bash
@@ -251,10 +277,10 @@ omega-hpc eval [OPTIONS]
 运行评测。
 
 Options:
-- `--benchmark <NAME>` 基准: `knowledge`, `memory`
+- `--benchmark <NAME>` 基准: `locomo`, `knowledge`, `memory`
 - `--dataset <PATH>` 数据集路径
 - `--output <PATH>` 输出文件
-- `--format <FMT>` 格式: `json`, `table`
+- `--format <FMT>` 格式: `json`, `table`, `html`
 
 ```bash
 omega-hpc eval --benchmark knowledge
@@ -337,9 +363,14 @@ cortex_path = ".hpc"
 chunk_size = 512
 
 [embedding]
-provider = "openai"
+provider = "openai"           # openai | cohere | local
 model = "text-embedding-3-small"
 api_key = "${OPENAI_API_KEY}"
+
+[embedding.local]
+model = "sentence-transformers/all-MiniLM-L6-v2"  # Candle 加载
+dim = 384
+cache_dir = "~/.cache/omega-hpc/models"
 
 [vector]
 store = "flat"
@@ -350,6 +381,40 @@ default_limit = 10
 hybrid_alpha = 0.7
 ```
 
+### Embedding Modes
+
+**远程 API（默认）**：使用 OpenAI/Cohere 嵌入服务，质量最高，需网络。
+
+**本地 CPU（Candle fallback）**：
+- 远程不可用时自动降级
+- 使用 `--provider local` 强制本地模式
+- 默认模型 all-MiniLM-L6-v2（~80MB，384 dim，~50 embeddings/sec）
+- 首次运行下载模型到 `cache_dir`
+
+**模型迁移警告**：切换 provider 导致向量维度变化（如 1536 → 384），必须 `omega-hpc rebuild --full` 重建索引。
+
+### Recall Mechanism
+
+`recall` 命令使用 Mem 层独立的 BM25 索引：
+1. `remember` 写入时同时索引到 Mem 层 BM25
+2. `recall` 查询通过 BM25 检索候选记忆
+3. Phase 2 后可为 Mem 层添加向量索引，提升语义匹配
+
+### Conversation Fact Extraction (SDK)
+
+```rust
+use omega_hpc_memory::MemoryStore;
+
+let mem = MemoryStore::new(".hpc/mem")?;
+let extracted = mem.extract_facts_from_conversation(&messages)?;
+// extracted.facts: Vec<ExtractedFact>
+// extracted.decisions: Vec<ExtractedDecision>
+// 调用方确认后显式写入
+for fact in extracted.facts {
+    mem.save_fact(&fact)?;
+}
+```
+
 ---
 
 ## Tips
@@ -358,19 +423,21 @@ hybrid_alpha = 0.7
 
 1. **批量添加**: 多次 `add` 增量索引
 2. **BM25 vs Vector**: 关键词用 BM25，语义用 Vector
-3. **网络依赖**: Vector 搜索依赖远程 API
+3. **离线使用**: `--provider local` 使用 Candle 本地嵌入
 
 ### 调试
 
 1. `omega-hpc stat` 查看状态
 2. `omega-hpc rebuild --full` 重建索引
 3. `--format json` 获取完整数据
+4. `omega-hpc gc --dry-run` 查看可回收空间
 
 ### 记忆管理
 
 1. **显式写入**: `remember` 命令需要显式调用
 2. **会话关联**: 用 `--session` 关联记忆到会话
 3. **手动清理**: `forget` 命令删除过期记忆
+4. **对话提取**: SDK 提供 `extract_facts_from_conversation`，由调用方决定何时调用
 
 ---
 
@@ -390,9 +457,42 @@ omega-hpc rebuild --full
 
 ### 向量搜索失败
 
-向量搜索依赖远程 API，检查：
+向量搜索默认使用远程 API，检查：
 - `OPENAI_API_KEY` 环境变量
 - 网络连接
+- 或使用 `--provider local` 切换到本地 Candle 模式
+
+### 磁盘空间持续增长
+
+```bash
+# 查看可回收空间
+omega-hpc gc --dry-run
+
+# 执行清理
+omega-hpc gc
+```
+
+KB 层使用 content-addressable 存储，文件修改后产生新 chunk，旧 chunk 需通过 `gc` 清理。
+
+### 切换嵌入模型后搜索异常
+
+切换 provider（如 openai → local）导致向量维度变化，需重建：
+```bash
+omega-hpc rebuild --full
+```
+
+---
+
+## Known Limitations
+
+| 限制 | 影响 | 缓解措施 |
+|------|------|----------|
+| 远程 API 需网络 | 向量搜索离线不可用 | Candle 本地 fallback |
+| 向量维度不可混用 | 切换模型需重建索引 | `omega-hpc rebuild --full` |
+| Mem 层 recall 依赖 BM25 | 语义匹配不如向量 | Phase 2 为 Mem 添加向量索引 |
+| KB 无自动 gc | 磁盘可能膨胀 | `omega-hpc gc` 手动清理 |
+| tantivy 索引跨版本不兼容 | 升级 tantivy 需重建 | 文档标注版本要求 |
+| eval 依赖外部 LLM | 评测需网络和 API key | 可配置本地 LLM |
 
 ---
 

@@ -60,8 +60,18 @@ omega-hpc recall <query>    # 回忆记忆
 ## 技术参考
 
 - [Tantivy](https://github.com/quickwit-oss/tantivy) - Rust 全文搜索引擎
+- [Candle](https://github.com/huggingface/candle) - HuggingFace 纯 Rust ML 框架
 - [Mem0](https://github.com/mem0ai/mem0) - AI Agent 记忆层
-- [Memvid](https://memvid.com) - 单文件 AI 记忆系统
+
+## Known Limitations
+
+| 限制 | 缓解措施 |
+|------|----------|
+| 远程嵌入 API 需网络 | Candle 本地 fallback（384 dim） |
+| 切换嵌入模型需重建索引 | `omega-hpc rebuild --full` |
+| Mem 层 recall 依赖 BM25 | Phase 2 为 Mem 添加向量索引 |
+| KB 无自动 gc | `omega-hpc gc` 手动清理 |
+| tantivy 索引跨 major 版本不兼容 | 文档标注版本要求 |
 
 ## 状态
 

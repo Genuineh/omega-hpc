@@ -7,8 +7,9 @@
 ### Phase 1: Foundation + Knowledge Index (MVP)
 - [ ] Create project structure
 - [ ] Implement `.hpc/cortex/` - Cortex layer (index)
-  - index.toml (document清单)
-  - bm25.bin (BM25结构)
+  - meta.toml (全局元数据)
+  - docs/{doc_id}.toml (按文档拆分的索引)
+  - bm25/ (tantivy 索引目录)
   - entities.toml (实体槽位)
 - [ ] Implement `.hpc/kb/` - Knowledge layer (content)
   - Content-addressable chunk 存储
@@ -19,8 +20,10 @@
 - [ ] `omega-hpc search --mode bm25`
 - [ ] `omega-hpc rebuild` command
 
-### Phase 2: Vector Search + Entities
-- [ ] Remote embedding API integration (OpenAI only)
+### Phase 2: Vector Search + Entities + Local Embedding
+- [ ] Remote embedding API integration (OpenAI)
+- [ ] Local CPU embedding via Candle (all-MiniLM-L6-v2, 384 dim)
+- [ ] Embedding fallback strategy (remote → local auto-degradation)
 - [ ] `omega-hpc search --mode vector`
 - [ ] `omega-hpc search --mode hybrid`
 - [ ] `omega-hpc stat` command
@@ -30,9 +33,12 @@
 - [ ] Implement `.hpc/mem/` - Memory layer
   - Session management
   - Fact/Decision storage
-- [ ] `omega-hpc remember` command
-- [ ] `omega-hpc recall` command
+  - Independent BM25 index for recall
+- [ ] `omega-hpc remember` command (write + index to Mem BM25)
+- [ ] `omega-hpc recall` command (query via Mem BM25)
 - [ ] `omega-hpc forget` command
+- [ ] `omega-hpc gc` command (KB chunk garbage collection)
+- [ ] `extract_facts_from_conversation` SDK method
 - [ ] Rust SDK crate
 - [ ] SDK documentation
 
@@ -55,8 +61,11 @@
 ### Architecture
 - **Multi-file layered** instead of single file
 - `.hpc/cortex/` - Index only (可独立重建)
+  - 按文档拆分: meta.toml + docs/{doc_id}.toml
+  - BM25: tantivy 索引目录（非单文件）
 - `.hpc/kb/` - Content chunks (content-addressable)
 - `.hpc/mem/` - Structured agent memories (TOML)
+  - 独立 BM25 索引用于 recall
 
 ### Layer Boundaries
 - **Cortex vs KB**: Cortex records `content_hash`, KB provides content by hash
@@ -64,15 +73,21 @@
 - **Query separation**: `search` for KB, `recall` for Mem
 
 ### Embedding Model
-- **Remote API only** (Phase 2)
-- No ONNX (has C library deps)
-- No Candle/burn (ecosystem immature)
-- OpenAI/Cohere only
+- **Dual mode: Remote API + Candle local fallback**
+- Remote: OpenAI/Cohere (1536+ dim, 最高质量)
+- Local: Candle + all-MiniLM-L6-v2 (384 dim, ~80MB, CPU only)
+- Auto-fallback when remote unavailable
 
 ### Memory Writing
-- **Explicit only** - no auto-extraction
-- Manual via CLI (`remember`) or SDK
+- **Explicit + SDK extraction**:
+  - CLI: `remember` 命令显式写入
+  - SDK: `extract_facts_from_conversation` 提取后显式写入
 - Session snapshots on demand
+
+### Garbage Collection
+- `omega-hpc gc` 清理 KB 层未引用 chunk
+- 默认 dry-run，需显式执行
+- 同时支持清理 stale 索引条目 (`--all`)
 
 ### Benchmark
 - **LoCoMo adopted** - dialogue memory recall across sessions
@@ -83,4 +98,3 @@
 ## Deferred
 
 - MCP service (explicitly not providing)
-- Local embedding (ONNX deps conflict with zero-dependency goal)
