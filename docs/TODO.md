@@ -2,7 +2,7 @@
 
 ## Active
 
-- [ ] **omega-hpc-memory**: Configurable layer-based memory and knowledge base system
+- [ ] **omega-hpc-memory**: Cognitive memory and knowledge base system with configurable layers
 
 ### Phase 1: Configurable Layer System + Knowledge Index (MVP)
 - [ ] Create project structure
@@ -41,53 +41,93 @@
 - [ ] `omega-hpc stat --layer <name>` command (per-layer statistics)
 - [ ] HNSW vector store (optional)
 
-### Phase 3: Memory Layer + SDK
-- [ ] Memory type layer implementation
-  - Session management
-  - Fact/Decision storage
-  - Per-layer independent BM25 index for recall
-- [ ] `omega-hpc remember --layer <name>` command
-- [ ] `omega-hpc recall --layer <name>` command
-- [ ] `omega-hpc forget --layer <name>` command
-- [ ] `omega-hpc gc --layer <name>` command (per-layer chunk garbage collection)
-- [ ] `extract_facts_from_conversation` SDK method
-- [ ] Rust SDK crate (`LayerRegistry`, `MemoryStore`, `SearchEngine`, `Indexer`)
-- [ ] SDK documentation
+### Phase 3: Three-Tier Memory Architecture
+- [ ] Implement `RawMemoryStore` - raw memory CRUD
+  - `save_raw()` - writes directly to raw/ directory
+  - `list_unorganized()` - get all unorganized raw memories
+  - `mark_organized()` / `delete_raw()`
+  - Raw count tracking + `raw_retention` enforcement
+- [ ] Implement `OrganizedMemoryStore` - structured memory CRUD
+  - `save_fact()` / `save_decision()` - writes to organized/
+  - `get_fact()` / `get_decision()` / `list_facts()` / `list_decisions()`
+  - BM25 index for organized memory recall
+- [ ] `omega-hpc remember --layer <name>` → writes to raw/
+- [ ] `omega-hpc recall --layer <name>` → queries organized/ + graph
+- [ ] `omega-hpc forget --layer <name>` command (per-layer)
 
-### Phase 4: Advanced Features
+### Phase 4: Organization Period (整理期) + Cognitive Graph
+- [ ] Implement `ConceptGraphStore` - graph storage + traversal
+  - Node CRUD: technology/concept/decision/person/project/rule
+  - Edge CRUD: depends_on/implements/selects/related_to/contradicts/...
+  - `query()`, `get_neighbors()`, `traverse()` APIs
+- [ ] Implement `Organizer` - memory consolidation engine
+  - Deduplication (LLM-powered)
+  - Conflict detection and resolution
+  - Fact/Decision extraction from raw memories
+  - Concept + relation extraction for graph
+  - `organize()` with `OrganizeOptions` (force/dry_run/delete_raw)
+  - `needs_organization()` check
+- [ ] `omega-hpc organize --layer <name>` command
+  - `--force`, `--dry-run`, `--delete-raw` flags
+  - OrganizeReport output
+- [ ] `omega-hpc graph --query <expr>` command
+  - `--node`, `--neighbors`, `--traverse` options
+  - Graph query expression syntax
+- [ ] `extract_facts_from_conversation` SDK method (raw → organized pipeline)
+- [ ] Memory layer config: `raw_retention`, `organize_on_count`, `auto_organize`
+
+### Phase 5: SDK + Advanced Features
+- [ ] Rust SDK crate: `LayerRegistry`, `MemoryStore`, `SearchEngine`, `Indexer`
+- [ ] `omega-hpc gc --layer <name>` (per-layer chunk garbage collection)
 - [ ] Incremental index updates
 - [ ] Time-travel debugging
 - [ ] `omega-hpc eval --benchmark locomo`
 - [ ] `omega-hpc eval --benchmark knowledge`
 - [ ] `omega-hpc eval --benchmark memory`
+- [ ] SDK documentation
 
 ## Completed
 
 - [x] Create project documentation structure
-- [x] Write PRD (configurable layer system with inheritance)
-- [x] Write Spec (layer types, Recall Fusion, per-layer indexing)
-- [x] Write Guide (layer-aware CLI, templates, SDK usage)
+- [x] Write PRD (cognitive memory system with three-tier architecture)
+- [x] Write Spec (layer types, Recall Fusion, three-tier memory, ConceptGraph)
+- [x] Write Guide (layer-aware CLI, organize/graph commands, SDK usage)
 
 ## Key Design Decisions
 
-### Architecture: Configurable Data Layers
-- **User-defined layers** via `.hpc.toml` instead of hardcoded kb/mem
-- **Layer types**: `content` (file indexing) and `memory` (agent memories)
-- **Layer inheritance**: `abstract = true` + `extends` for DRY config
-- **Recall Fusion**: cross-layer search with boost + priority
-- **Per-layer indexing**: each layer has independent BM25, independent config
+### Architecture: Cognitive Memory System
+- **Three-tier memory**: raw (碎片) → organized (结构化) → graph (认知)
+- **整理期 (Organization Period)**: 定期/手动将 raw memory 转化为 organized + graph
+- **Concept Graph as meta-cognition**: 项目认知体系的结构化表达
+- **User-defined layers**: `.hpc.toml` 定义，支持继承
 
 ### Directory Layout
-- `.hpc/cortex/layers/{name}/` - per-layer index (index.toml + docs/ + bm25/)
-- `.hpc/layers/{name}/` - per-layer storage (chunks or TOML)
-- `.hpc/cortex/embeddings/` - shared vector store
-- `.hpc/cortex/entities.toml` - shared entity slots
+```
+.hpc/layers/{memory-layer}/
+  raw/                   # 短期记忆（碎片）
+  organized/facts/        # 长期记忆 - facts
+  organized/decisions/   # 长期记忆 - decisions
+  organized/sessions/     # 会话
+  graph/                 # 认知图谱 (nodes + edges)
+```
 
-### Layer Boundaries
-- **Cortex vs Layer**: Cortex records `content_hash`, layer provides content by hash
-- **Content vs Memory**: content = file chunks, memory = structured facts/decisions
-- **Query separation**: `search` for content layers, `recall` for memory layers
-- **Cross-layer**: Recall Fusion merges results from multiple layers
+### Layer Types
+- **content**: file chunks, `add`, `search`
+- **memory**: three-tier memory, `remember`, `recall`, `organize`, `graph`
+
+### Organization Algorithm
+1. Read unorganized raw memories
+2. LLM: deduplicate, detect conflicts, extract key facts/decisions
+3. LLM: extract concepts and relations from structured memories
+4. Write to organized/ (facts + decisions)
+5. Update graph (upsert nodes + edges)
+6. Mark/delete raw memories
+7. Return OrganizeReport
+
+### Recall with Graph Reasoning
+- Recall queries organized memory (BM25) AND graph (traversal)
+- Graph traversal: follow decision chains, concept relations
+- Combined result: structured memory + inferred context from graph
 
 ### Embedding Model
 - **Dual mode: Remote API + Candle local fallback**
@@ -95,19 +135,8 @@
 - Local: Candle + all-MiniLM-L6-v2 (384 dim, ~80MB, CPU only)
 - Auto-fallback when remote unavailable
 
-### Memory Writing
-- **Explicit + SDK extraction**:
-  - CLI: `remember --layer <name>` 命令显式写入
-  - SDK: `extract_facts_from_conversation` 提取后显式写入
-- Session snapshots on demand
-
-### Garbage Collection
-- `omega-hpc gc --layer <name>` 清理指定 content 层未引用 chunk
-- 默认 dry-run，需显式执行
-- 同时支持清理 stale 索引条目 (`--all`)
-
 ### Init Templates
-- `default` - kb (content) + mem (memory)
+- `default` - kb (content) + mem (memory, three-tier)
 - `code` - code(abstract) → rust/python + docs + decisions + memory
 - `minimal` - single content + memory
 
@@ -120,5 +149,6 @@
 ## Deferred
 
 - MCP service (explicitly not providing)
-- Layer config hot-reload (Phase 2+)
-- Layer groups (grouping layers for combined operations)
+- Layer config hot-reload
+- Layer groups
+- Auto-organize scheduling (定时整理)

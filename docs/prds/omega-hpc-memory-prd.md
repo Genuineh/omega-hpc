@@ -13,13 +13,15 @@
 
 **核心理念：索引即记忆**。保存结构化索引（类比大脑皮层/元认知），内容按需加载。
 
+**认知架构**：系统模拟人类记忆的三层结构——短期记忆（碎片）→ 整理期（巩固）→ 长期记忆 + 认知图谱（结构化知识）。记忆不是简单堆放，而是经过组织过程形成项目的认知体系。
+
 **集成方式**：仅通过 CLI 或 SDK 集成，不提供 MCP 服务。
 
 ---
 
 ## Problem
 
-当前 omega-hpc 存在两层需求未被满足：
+当前 omega-hpc 存在三层需求未被满足：
 
 **记忆层缺失**
 - Agent 每次会话从零开始，无法保留历史决策
@@ -29,6 +31,11 @@
 **知识库层缺失**
 - 大量文档和技能指南无法快速检索
 - 文档检索与 Agent 记忆是割裂的两套系统
+
+**认知体系缺失**
+- 记忆碎片没有整理过程，无法形成结构化知识
+- 决策没有关联因果链，无法推理"为什么"
+- 缺乏项目级的概念图谱，无法理解实体关系
 
 **个性化检索缺失**
 - 固定分层无法适应不同项目需求
@@ -92,6 +99,32 @@
 - Memory 层文件是 TOML，可追踪变更历史
 - `.hpc.toml` 层配置可纳入版本控制，团队共享
 
+### 6. 三层记忆与认知体系
+
+Memory 层采用三层架构，模拟人类记忆的整理过程：
+
+```
+短期记忆(raw/) ──整理期──→ 长期记忆(organized/) ──提取──→ 认知图谱(graph/)
+     ↓                                              ↑
+  碎片、矛盾、                          概念节点 + 关系边
+  低置信度                              支持推理查询
+```
+
+**为什么需要整理期（Organization Period）**：
+
+`remember` 写入的是原始碎片——快速、未经筛选。类比人类睡眠时的记忆巩固过程，系统需要定期整理：
+- **去重**：合并相似的记忆碎片
+- **矛盾检测**：识别相互矛盾的信息
+- **结构化**：将碎片转化为高置信度的事实和决策
+- **图谱提取**：从结构化记忆中提取概念和关系
+
+**认知图谱作为元认知**：
+
+认知图谱是项目的"理解层"——不是记忆本身，而是关于记忆的知识。它使系统能够：
+- 推理"为什么做了这个决策"（决策链遍历）
+- 理解"这个概念和其他概念的关系"（关系网络）
+- 追踪"这个决定的演变过程"（时间线）
+
 ---
 
 ## Architecture
@@ -113,7 +146,13 @@
 │
 ├── layers/                    # 用户定义的数据层
 │   ├── {content-layer}/       # content: chunk 存储
-│   ├── {memory-layer}/        # memory: TOML 记忆
+│   ├── {memory-layer}/        # memory: 三层记忆结构
+│   │   ├── raw/              # 短期记忆（碎片）
+│   │   ├── organized/         # 长期记忆（已整理）
+│   │   │   ├── facts/
+│   │   │   ├── decisions/
+│   │   │   └── sessions/
+│   │   └── graph/            # 认知图谱
 │   └── ...
 │
 └── sync/
@@ -205,65 +244,56 @@ resolve(name):
 
 ## Memory Writing Mechanism
 
+### 三层记忆写入流程
+
+```
+remember → raw/ (短期) → organize → organized/ (长期) + graph/ (认知)
+                              ↓
+                         手动/定时触发
+```
+
 ### 写入触发方式
 
-**1. 手动写入（CLI）**
+**1. 写入短期记忆（CLI）**
 ```bash
 omega-hpc remember "用户偏好 Rust" --type fact --layer memory
-omega-hpc remember "选择 Tantivy" --type decision
+omega-hpc remember "选择 Tantivy 因为无外部依赖" --type decision
 ```
+→ 写入 `layers/memory/raw/`，不做整理
 
-**2. 手动写入（SDK）**
+**2. 写入短期记忆（SDK）**
 ```rust
 let mem = MemoryStore::new("memory", &registry)?;
-mem.save_fact(Fact {
-    content: "用户偏好 Rust".into(),
-    confidence: 0.9,
-})?;
+mem.remember("用户偏好 Rust", MemoryType::Fact, None)?;
 ```
+→ 写入 raw/，返回 raw memory id
 
-**3. 会话快照（CLI）**
+**3. 触发整理（CLI）**
 ```bash
-omega-hpc session end
+omega-hpc organize --layer memory
 ```
+→ 读取所有 raw memories，整理后写入 organized/ + 更新 graph/
 
-**4. SDK 会话管理**
+**4. SDK 会话管理 + 整理**
 ```rust
 let session = mem.start_session("claude-code", "jerryg")?;
 session.extract_facts_from_conversation(&messages)?;
-session.save_decision("选择了 X 方案", "因为 Y 原因")?;
-session.end()?;
+// 调用 remember 多次后：
+mem.organize(OrganizeOptions::default())?;
 ```
 
-### 何时触发记忆提取
+### 何时触发整理
 
-- **显式触发**：用户或 Agent 调用 `remember` 命令
-- **会话结束**：自动生成会话摘要（如果启用）
-- **对话提取**：SDK 提供 `extract_facts_from_conversation` 方法，由调用方决定何时调用
-
-### 对话记忆提取管道
-
-为支持 LoCoMo 等对话记忆评测场景，SDK 提供对话 → 结构化记忆的提取接口：
-
-```
-对话历史 → [LLM 提取] → 结构化 facts/decisions → 写入 memory 层
-```
-
-**提取流程**：
-1. 调用方传入对话消息列表
-2. SDK 使用 LLM 提取关键 facts 和 decisions
-3. 返回提取结果供调用方确认或修改
-4. 调用方确认后写入指定 memory 层
-
-**LLM 依赖**：
-- 提取质量取决于 LLM 能力
-- 支持配置不同 LLM 提供者（OpenAI/本地）
-- 本地模式可使用 Candle 运行小型模型（质量降低但离线可用）
+- **手动触发**：`omega-hpc organize --layer memory`
+- **定量触发**：raw memory 数量达到 `organize_on_count` 时建议整理
+- **定时触发**：`auto_organize = true` 时按 `organize_interval` 自动整理
 
 ### 不做的事
 
+- 不会自动将 remember 结果写入 organized memory（需要显式 organize）
 - 不会自动监听对话并提取记忆（需要显式调用）
 - 不会在后台运行 LLM 进行摘要（由调用方负责）
+- 不会自动删除 raw memory（需要 `--delete-raw`）
 
 ---
 
@@ -280,6 +310,8 @@ session.end()?;
 | 向量存储 | 可插拔 | 支持 flat/HNSW |
 | 嵌入模型 | 远程优先 + 本地 fallback | 远程高质量，Candle 本地离线可用 |
 | CLI/SDK | 仅这两者 | 不提供 MCP 服务 |
+| 记忆架构 | 三层（raw/organized/graph） | 类人记忆整理过程，形成认知体系 |
+| 整理触发 | 手动 + 定量 + 定时 | 不过度自动化，保持用户控制 |
 
 ### 嵌入模型选择
 
@@ -341,8 +373,10 @@ dim = 384
    - `omega-hpc init` - 初始化（含模板选择）
    - `omega-hpc add --layer <name>` - 添加到指定层
    - `omega-hpc search --layer <name>` - 检索（跨层或单层）
-   - `omega-hpc recall --layer <name>` - 回忆记忆
-   - `omega-hpc remember --layer <name>` - 写入记忆
+   - `omega-hpc remember --layer <name>` - 写入短期记忆
+   - `omega-hpc recall --layer <name>` - 回忆记忆（结合图谱）
+   - `omega-hpc organize --layer <name>` - 整理记忆
+   - `omega-hpc graph --query <expr>` - 查询认知图谱
    - `omega-hpc forget --layer <name>` - 删除
    - `omega-hpc layers` - 列出层配置
    - `omega-hpc stat` - 统计
@@ -354,21 +388,27 @@ dim = 384
 
 ### Should Have
 
-6. **增量索引更新**
+6. **三层记忆架构**
+   - RawMemoryStore: 短期记忆写入
+   - Organizer: 整理期算法（去重、矛盾检测、关系提取）
+   - OrganizedMemoryStore: 长期记忆存储
+   - ConceptGraphStore: 认知图谱存储与遍历
+
+7. **增量索引更新**
    - 文件变化时只更新受影响部分
    - `omega-hpc rebuild` 重建索引
 
-7. **多项目隔离**
+8. **多项目隔离**
    - 不同项目使用不同 .hpc 目录
-
-8. **时间旅行**
-   - 查看历史索引版本
 
 ### Nice to Have
 
-9. **记忆总结**
-   - SDK 提供记忆序列化接口
-   - LLM 摘要由调用方负责
+9. **时间旅行**
+   - 查看历史索引版本
+
+10. **记忆总结**
+    - SDK 提供记忆序列化接口
+    - LLM 摘要由调用方负责
 
 ---
 
@@ -394,20 +434,27 @@ dim = 384
 - [ ] `stat` 命令（按层统计）
 - [ ] HNSW vector store（可选）
 
-### Phase 3: 记忆层 + SDK
+### Phase 3: 三层记忆架构
 
-- [ ] Memory 类型层实现
-- [ ] `remember --layer` 命令
-- [ ] `recall --layer` 命令
+- [ ] RawMemoryStore 实现
+- [ ] OrganizedMemoryStore 实现
+- [ ] `remember --layer` → raw/
+- [ ] `recall --layer` → organized/ + graph/
 - [ ] `forget --layer` 命令
+
+### Phase 4: 整理期 + 认知图谱
+
+- [ ] ConceptGraphStore 实现（节点 + 边存储与遍历）
+- [ ] Organizer 实现（LLM 去重、矛盾检测、关系提取）
+- [ ] `omega-hpc organize --layer <name>` 命令
+- [ ] `omega-hpc graph --query <expr>` 命令
 - [ ] `extract_facts_from_conversation` SDK 方法
+
+### Phase 5: SDK + 高级特性
+
 - [ ] Rust SDK 发布
-- [ ] Session 管理 API
-
-### Phase 4: 高级特性
-
+- [ ] `omega-hpc gc --layer <name>`
 - [ ] 增量索引更新
-- [ ] `gc` 命令（按层回收）
 - [ ] 时间旅行
 - [ ] `eval` 评测命令
 
@@ -500,10 +547,11 @@ dim = 384
 
 | 限制 | 影响 | 缓解措施 |
 |------|------|----------|
-| 远程 API 需网络 | 向量搜索离线不可用 | Candle 本地 fallback |
+| 远程 API 需网络 | 向量搜索/整理 离线不可用 | Candle 本地 fallback |
 | 向量维度不可混用 | 切换模型需重建索引 | `omega-hpc rebuild --full` |
-| Memory 层 recall 依赖 BM25 | 语义匹配不如向量 | Phase 2 为 Memory 层添加向量索引 |
+| Organization 依赖 LLM | 整理需网络和 API key | 使用本地 LLM 或手动整理 |
+| Graph 遍历深度限制 | 深层推理可能超时 | 限制 depth 参数 |
 | Content 层无自动 gc | 磁盘可能膨胀 | `omega-hpc gc` 手动清理 |
 | tantivy 索引跨版本不兼容 | 升级 tantivy 需重建 | 文档标注版本要求 |
-| eval 依赖外部 LLM | 评测需网络和 API key | 可配置本地 LLM |
 | 层继承仅在配置加载时解析 | 运行时修改继承需重启 | 配置热重载为 Phase 2+ |
+| Raw memory 无限积累 | 磁盘膨胀 | 设置 `raw_retention` 并定期 organize |

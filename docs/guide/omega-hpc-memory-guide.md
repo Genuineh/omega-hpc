@@ -10,6 +10,8 @@ omega-hpc-memory 是统一记忆与知识库系统，服务于：
 
 **核心理念：索引即记忆**。保存索引结构，内容按需加载。
 
+**认知架构**：系统模拟人类记忆的三层结构——短期记忆（碎片）→ 整理期（巩固）→ 长期记忆 + 认知图谱。记忆不是简单堆放，而是经过组织过程形成认知体系。
+
 **集成方式**：仅 CLI 和 SDK，不提供 MCP。
 
 **可配置数据层**：用户通过 `.hpc.toml` 定义数据层，每层有独立的索引策略和召回行为，支持继承。系统根据层配置提供个性化检索方案。
@@ -45,14 +47,20 @@ omega-hpc search "为什么选择 Tantivy"
 # 5. 搜索指定层
 omega-hpc search "fn main" --layer rust
 
-# 6. 写入记忆
+# 6. 写入记忆（进入短期记忆层）
 omega-hpc remember "用户偏好 Rust" --type fact --layer memory
-omega-hpc remember "选择了 Tantivy" --type decision
+omega-hpc remember "选择了 Tantivy 因为无外部依赖" --type decision
 
-# 7. 回忆记忆
+# 7. 整理记忆（碎片 → 结构化 + 认知图谱）
+omega-hpc organize --layer memory
+
+# 8. 回忆记忆（结合认知图谱推理）
 omega-hpc recall "上次为什么选了 Tantivy"
 
-# 8. 查看统计
+# 9. 查询认知图谱（决策链、概念关系）
+omega-hpc graph --query "Tantivy"
+
+# 10. 查看统计
 omega-hpc stat
 ```
 
@@ -297,6 +305,88 @@ Layer rust (boost=1.5):
 Layer docs (boost=1.0):
   [2] Tantivy 是 Rust 全文搜索引擎 (score: 0.8)
 ```
+
+---
+
+## Three-Tier Memory Architecture
+
+Memory 层采用三层架构，模拟人类记忆的整理过程：
+
+```
+短期记忆(raw/) ──整理期──→ 长期记忆(organized/) ──提取──→ 认知图谱(graph/)
+     ↓                                              ↑
+  碎片、矛盾、                          概念节点 + 关系边
+  低置信度                              支持推理查询
+```
+
+### 为什么要整理？
+
+`remember` 写入的是**短期记忆**——快速、不加筛选。可能矛盾、低置信度、冗余。
+
+整理期将碎片转化为**结构化知识**，并从中提取**概念关系图**。
+
+### 短期记忆层（raw/）
+
+```bash
+# 写入记忆（进入 raw/，不整理）
+omega-hpc remember "用户好像偏好 Rust" --type fact --confidence 0.6
+omega-hpc remember "Rust 好像不错" --type observation
+
+# 查看 raw memory 数量
+omega-hpc stat --layer memory
+
+# Raw memory 积累后建议：
+#   omega-hpc organize --layer memory
+```
+
+### 整理期（organize）
+
+```bash
+# 整理（碎片 → 结构化 + 图谱）
+omega-hpc organize --layer memory
+
+# 仅模拟，不写入
+omega-hpc organize --layer memory --dry-run
+
+# 整理并清理 raw
+omega-hpc organize --layer memory --delete-raw
+```
+
+**整理过程**：
+1. LLM 读取所有 raw memories
+2. 去重、合并矛盾、提精华
+3. 生成 structured facts/decisions
+4. 提取概念和关系，更新认知图谱
+5. 输出整理报告
+
+### 长期记忆层（organized/）
+
+整理后的结构化记忆，高置信度，有上下文：
+
+```bash
+# 回忆（查询 organized/ + graph）
+omega-hpc recall "用户偏好什么语言"
+omega-hpc recall "为什么选择 Tantivy"
+```
+
+### 认知图谱（graph/）
+
+从整理后的记忆中提取的概念关系网络：
+
+```bash
+# 搜索概念
+omega-hpc graph --query "Rust"
+
+# 查看节点
+omega-hpc graph --node concept_tantivy
+
+# 沿关系遍历
+omega-hpc graph --traverse decision_002 --relation selects --depth 2
+```
+
+**图谱节点类型**：`technology`、`concept`、`decision`、`person`、`rule`
+
+**图谱关系类型**：`selects`、`depends_on`、`implements`、`related_to`、`influenced_by`、`contradicts`
 
 ---
 
@@ -577,6 +667,82 @@ omega-hpc gc --layer rust
 omega-hpc gc --all
 ```
 
+### organize
+
+```bash
+omega-hpc organize [OPTIONS]
+```
+
+执行整理期，将 raw memory 转化为 organized memory 并更新认知图谱。
+
+Options:
+- `--layer <NAME>` 指定 memory 层（默认第一个）
+- `--force` 即使未达阈值也强制整理
+- `--dry-run` 仅模拟，不写入
+- `--delete-raw` 整理后删除已处理的 raw memory
+
+```bash
+# 标准整理
+omega-hpc organize --layer memory
+
+# 强制整理（即使 raw 很少）
+omega-hpc organize --layer memory --force
+
+# 仅模拟，查看会生成什么
+omega-hpc organize --layer memory --dry-run
+
+# 整理并清理 raw
+omega-hpc organize --layer memory --delete-raw
+```
+
+**输出示例**：
+
+```
+整理报告
+========================
+Facts created:    12
+Decisions created: 3
+Graph nodes:      18
+Graph edges:      24
+Raw processed:    47
+Conflicts resolved: 2
+Duration: 4.2s
+
+建议: 下次整理在 raw 数量达到 50 时进行
+```
+
+### graph
+
+```bash
+omega-hpc graph [OPTIONS]
+```
+
+查询认知图谱，支持遍历、搜索等图操作。
+
+Options:
+- `--layer <NAME>` 指定 memory 层（默认第一个）
+- `--query <QUERY>` 模糊搜索节点名称
+- `--node <ID>` 查看指定节点详情
+- `--neighbors <ID>` 查看节点的邻居
+- `--traverse <ID>` 按关系遍历
+- `--relation <REL>` 指定关系类型
+- `--depth <N>` 遍历深度
+
+```bash
+# 搜索概念
+omega-hpc graph --query "Rust"
+omega-hpc graph --query "Tantivy"
+
+# 查看节点详情
+omega-hpc graph --node concept_tantivy
+
+# 查看某节点的邻居
+omega-hpc graph --neighbors concept_tantivy
+
+# 沿 selects 关系遍历 2 层
+omega-hpc graph --traverse decision_002 --relation selects --depth 2
+```
+
 ### eval
 
 ```bash
@@ -763,13 +929,20 @@ strategy = "bm25"
 
 [[layer]]
 name = "memory"
+description = "Agent 认知记忆"
 type = "memory"
 priority = 3
+
+[layer.memory]
+raw_retention = 100       # raw memory 保留上限
+organize_on_count = 50    # 建议整理的阈值
 
 [layer.recall]
 boost = 0.8
 max_results = 5
-strategy = "bm25"
+strategy = "hybrid"
+weight_bm25 = 0.3
+weight_graph = 0.7         # recall 时结合图谱推理
 ```
 
 ### Layer 配置字段参考
@@ -802,6 +975,15 @@ strategy = "bm25"
 | `strategy` | enum | "hybrid" | `bm25`、`vector`、`hybrid` |
 | `weight_bm25` | f32 | 0.5 | hybrid 模式 BM25 权重 |
 | `weight_vector` | f32 | 0.5 | hybrid 模式向量权重 |
+| `weight_graph` | f32 | 0.0 | recall 时图谱推理权重（memory 层） |
+
+### Memory 配置（memory 类型层）
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `raw_retention` | u32 | 100 | raw memory 保留上限，超出后强制整理 |
+| `organize_on_count` | u32 | 50 | 建议整理的 raw 数量阈值 |
+| `auto_organize` | bool | false | 是否自动整理（定时） |
 
 ### Embedding Modes
 
@@ -913,13 +1095,14 @@ omega-hpc rebuild --full
 
 | 限制 | 影响 | 缓解措施 |
 |------|------|----------|
-| 远程 API 需网络 | 向量搜索离线不可用 | Candle 本地 fallback |
+| 远程 API 需网络 | 向量搜索/整理 离线不可用 | Candle 本地 fallback |
 | 向量维度不可混用 | 切换模型需重建索引 | `omega-hpc rebuild --full` |
-| Memory 层 recall 依赖 BM25 | 语义匹配不如向量 | Phase 2 添加向量索引 |
+| Organization 依赖 LLM | 整理需网络和 API key | 使用本地 LLM 或手动整理 |
+| Graph 遍历深度限制 | 深层推理可能超时 | 限制 depth 参数 |
 | Content 层无自动 gc | 磁盘可能膨胀 | `omega-hpc gc` 手动清理 |
 | tantivy 索引跨版本不兼容 | 升级 tantivy 需重建 | 文档标注版本要求 |
-| eval 依赖外部 LLM | 评测需网络和 API key | 可配置本地 LLM |
 | 层继承仅在配置加载时解析 | 运行时修改继承需重启 | 配置热重载为 Phase 2+ |
+| Raw memory 无限积累 | 磁盘膨胀 | 设置 `raw_retention` 并定期 organize |
 
 ---
 
@@ -929,8 +1112,10 @@ omega-hpc rebuild --full
 |------|--------|------|
 | `add --layer <name>` | content 层 | 添加文档到知识库 |
 | `search --layer <name>` | content 层 | 检索知识库文档 |
-| `remember --layer <name>` | memory 层 | 写入 Agent 记忆 |
-| `recall --layer <name>` | memory 层 | 回忆 Agent 记忆 |
+| `remember --layer <name>` | memory 层 raw/ | 写入短期记忆（碎片） |
+| `recall --layer <name>` | memory 层 organized/ + graph/ | 回忆结构化记忆 |
+| `organize --layer <name>` | memory 层 | 整理记忆，更新图谱 |
+| `graph --query <expr>` | memory 层 graph/ | 查询认知图谱 |
 
 **示例**：
 
@@ -944,9 +1129,16 @@ omega-hpc search "架构设计原则"
 # 搜索指定层
 omega-hpc search "fn main" --layer rust
 
-# 写入记忆到 memory 层
+# 写入记忆到 memory 层（进入 raw/）
 omega-hpc remember "选择了 Rust 因为性能" --layer memory
 
-# 回忆记忆
+# 整理记忆（碎片 → 结构化 + 图谱）
+omega-hpc organize --layer memory
+
+# 回忆记忆（结合图谱推理）
 omega-hpc recall "为什么选择 Rust"
+
+# 查询认知图谱
+omega-hpc graph --query "Rust"
+omega-hpc graph --traverse decision_002 --relation selects --depth 2
 ```
